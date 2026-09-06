@@ -25,6 +25,7 @@ impl Rng {
         Rng { s: [next(), next(), next(), next()] }
     }
 
+    #[cfg(unix)]
     pub fn from_entropy() -> Self {
         let mut buf = [0u8; 8];
         // /dev/urandom is always present on the Unix targets we support
@@ -35,6 +36,16 @@ impl Rng {
             .expect("failed to read /dev/urandom");
         Rng::seeded(u64::from_le_bytes(buf))
     }
+
+    /// Windows entropy without new crates: `ProcessPrng` (bcryptprimitives,
+    /// Win8+) fills the seed directly. Never panics — on failure falls back
+    /// to a time+pid mix, which is plenty for visual effects.
+    #[cfg(windows)]
+    pub fn from_entropy() -> Self {
+        Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
+    }
+
+
 
     /// Core generator: xoshiro256++ next().
     fn next_u64(&mut self) -> u64 {
@@ -106,6 +117,32 @@ impl Rng {
     }
 }
 
+/// One OS-backed u64 seed via `RtlGenRandom` (`SystemFunction036` in
+/// advapi32, present in every toolchain). `None` on any failure so the caller
+/// can fall back instead of aborting (release sets `panic = "abort"`).
+#[cfg(windows)]
+fn os_seed() -> Option<u64> {
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn SystemFunction036(random_buffer: *mut u8, random_buffer_length: u32) -> u8;
+    }
+    let mut buf = [0u8; 8];
+    // SAFETY: fills exactly random_buffer_length bytes on success.
+    let ok = unsafe { SystemFunction036(buf.as_mut_ptr(), buf.len() as u32) };
+    (ok != 0).then(|| u64::from_le_bytes(buf))
+}
+
+/// Last-resort seed: wall-clock nanos mixed with the pid. Uniqueness is all
+/// an unseeded visual run needs.
+#[cfg(windows)]
+fn fallback_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15);
+    nanos ^ ((std::process::id() as u64).wrapping_mul(0xBF58476D1CE4E5B9))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +154,11 @@ mod tests {
         for _ in 0..100 {
             assert_eq!(a.next_u64(), b.next_u64());
         }
+    }
+
+    #[test]
+    fn entropy_does_not_panic() {
+        let _ = Rng::from_entropy();
     }
 
     #[test]

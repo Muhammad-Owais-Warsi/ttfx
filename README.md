@@ -143,8 +143,8 @@ Upstream is not vendored here — the harness fetches it, because it's their cod
 
 ## Scope
 
-Linux and macOS. Built for [Omarchy](https://omarchy.org) originally; nothing targets a
-specific libc, and CI runs the tests and CLI corpus on both platforms. The byte-exact
+Linux, macOS, and Windows. Built for [Omarchy](https://omarchy.org) originally; nothing targets a
+specific libc, and CI runs the tests and CLI corpus on all three platforms. The byte-exact
 parity suites stay pinned to Linux/glibc — Apple's libm rounds a few transcendentals a
 last-ulp differently, which quantization hides in real frames but a bit-exact comparison
 would surface.

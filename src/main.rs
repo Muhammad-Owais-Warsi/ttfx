@@ -39,7 +39,6 @@ fn forget_engine<E, C>(effect: E, ctx: C) {
 
 fn main() -> ExitCode {
     ttfx::restore_sigpipe();
-    ttfx::enable_ansi();
     let cli = cli::Cli::parse();
 
     // upstream prints the completion script and returns before any input handling
@@ -53,6 +52,8 @@ fn main() -> ExitCode {
         clap_complete::generate(generator, &mut command, "ttfx", &mut std::io::stdout());
         return ExitCode::SUCCESS;
     }
+
+
 
     let input_data = match &cli.input_file {
         Some(path) => match std::fs::read(path) {
@@ -76,6 +77,13 @@ fn main() -> ExitCode {
         ttfx::outln!("NO INPUT.");
         return ExitCode::from(1);
     }
+
+    // Console mode is touched only for real runs (never for --help,
+    // --print-completion, parse errors or input errors) and restored by the
+    // guard on every exit path through normal control flow (`exit()` calls
+    // all happen before this point, except the SIGTERM path, which restores
+    // explicitly). No-op off Windows.
+    let _console_mode = ttfx::ConsoleModeGuard::enable();
 
     if cli.m0_dump {
         return m0_dump(&input_data, &cli);

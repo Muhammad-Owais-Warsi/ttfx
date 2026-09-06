@@ -17,8 +17,16 @@ cd "$ROOT"
 cargo test --release
 "$ROOT/bin/build"
 ./tools/tests/cli_corpus.sh
-python3 tools/tests/sigterm_behavior.py
-python3 tools/tests/terminal_close_behavior.py
+
+# The pty suites below are Unix-only: they import fcntl/pty/termios at module
+# scope and drive real POSIX signals, so they cannot even start on Windows
+# (Git for Windows reports MINGW64_NT/MSYS/CYGWIN here, never Linux).
+case "$(uname -s)" in
+Linux)
+  python3 tools/tests/sigterm_behavior.py
+  python3 tools/tests/terminal_close_behavior.py
+  ;;
+esac
 
 # Bit-exact parity is pinned to Linux/glibc (plan.md §5.20) — elsewhere the
 # reference was never promised to match. The resize suite goes with it: its

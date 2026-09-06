@@ -60,12 +60,28 @@ pub fn notify_terminal_resize() {
     TERMINAL_RESIZED.store(true, Ordering::SeqCst);
 }
 
-/// Enable ANSI escape processing. No-op on Unix; on Windows turns on
+/// Enable ANSI escape processing for the run, restoring the previous console
+/// mode when dropped. No-op on Unix; on Windows turns on
 /// VIRTUAL_TERMINAL_PROCESSING for stdout (best effort: a redirected handle
-/// or an old console just keeps working without colors).
-pub fn enable_ansi() {
-    #[cfg(windows)]
-    windows::enable_virtual_terminal();
+/// or an old console just keeps working without colors) and puts the saved
+/// mode back so the user's shell is left as it was found.
+pub struct ConsoleModeGuard {
+    _priv: (),
+}
+
+impl ConsoleModeGuard {
+    pub fn enable() -> Self {
+        #[cfg(windows)]
+        windows::enable_virtual_terminal();
+        ConsoleModeGuard { _priv: () }
+    }
+}
+
+impl Drop for ConsoleModeGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        windows::restore_console_mode();
+    }
 }
 
 #[cfg(unix)]
@@ -181,7 +197,7 @@ mod unix {
 #[cfg(windows)]
 mod windows {
     use super::{INTERRUPTED, TERMINAL_RESIZED};
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     type Handle = isize;
     type Dword = u32;
@@ -189,9 +205,11 @@ mod windows {
 
     const STD_OUTPUT_HANDLE: Dword = 0xFFFF_FFF5;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: Dword = 0x0004;
-    const WINDOW_BUFFER_SIZE_EVENT: u16 = 0x0004;
     const CTRL_C_EVENT: Dword = 0;
     const CTRL_BREAK_EVENT: Dword = 1;
+
+    static SAVED_OUTPUT_MODE: AtomicU32 = AtomicU32::new(0);
+    static OUTPUT_MODE_SAVED: AtomicBool = AtomicBool::new(false);
 
     unsafe extern "system" {
         fn GetStdHandle(nStdHandle: Dword) -> Handle;
@@ -199,35 +217,12 @@ mod windows {
         fn SetConsoleMode(hConsoleHandle: Handle, dwMode: Dword) -> Bool;
         fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(Dword) -> Bool>, add: Bool)
         -> Bool;
-        fn CreateFileW(
-            lpFileName: *const u16,
-            dwDesiredAccess: Dword,
-            dwShareMode: Dword,
-            lpSecurityAttributes: *const u8,
-            dwCreationDisposition: Dword,
-            dwFlagsAndAttributes: Dword,
-            hTemplateFile: Handle,
-        ) -> Handle;
-        fn ReadConsoleInputW(
-            hConsoleInput: Handle,
-            lpBuffer: *mut InputRecord,
-            nLength: Dword,
-            lpNumberOfEventsRead: *mut Dword,
-        ) -> Bool;
-        fn CloseHandle(hObject: Handle) -> Bool;
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct InputRecord {
-        event_type: u16,
-        reserved: u16,
-        payload: [u8; 16],
     }
 
     pub(super) fn enable_virtual_terminal() {
         // SAFETY: plain kernel32 queries on the output handle; failure
         // (redirected handle, old console) just means colors stay off.
+        // The previous mode is saved so the Drop guard can put it back.
         unsafe {
             let out = GetStdHandle(STD_OUTPUT_HANDLE);
             if out == 0 || out == -1 {
@@ -237,16 +232,37 @@ mod windows {
             if GetConsoleMode(out, &mut mode) == 0 {
                 return;
             }
+            SAVED_OUTPUT_MODE.store(mode, Ordering::SeqCst);
+            OUTPUT_MODE_SAVED.store(true, Ordering::SeqCst);
             let _ = SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+
+    pub(super) fn restore_console_mode() {
+        if !OUTPUT_MODE_SAVED.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let saved = SAVED_OUTPUT_MODE.load(Ordering::SeqCst);
+        // SAFETY: restoring a mode previously read from the same handle.
+        unsafe {
+            let out = GetStdHandle(STD_OUTPUT_HANDLE);
+            if out == 0 || out == -1 {
+                return;
+            }
+            let _ = SetConsoleMode(out, saved);
         }
     }
 
     /// Ctrl-C / Ctrl-Break sets INTERRUPTED so the run loop tears down the
     /// cursor through normal control flow, exactly like SIGINT on Unix.
     pub fn install_sigint_handler() {
-        // SAFETY: handler only stores an atomic flag.
+        // SAFETY: handler only stores an atomic flag. If registration itself
+        // fails there is nothing safe to do here: Ctrl-C then terminates the
+        // process with default handling, skipping the cursor teardown.
         unsafe {
-            SetConsoleCtrlHandler(Some(handle_ctrl), 1);
+            if SetConsoleCtrlHandler(Some(handle_ctrl), 1) == 0 {
+                crate::errln!("Warning: failed to install console Ctrl handler.");
+            }
         }
     }
 
@@ -263,63 +279,40 @@ mod windows {
     pub fn install_sigterm_handler() {}
 
     /// Windows never delivers SIGTERM to console apps; exit 1 after teardown.
+    /// `exit` skips destructors, so restore the console mode explicitly here
+    /// (the Drop guard cannot run on this path).
     pub fn die_from_sigterm() -> ! {
+        restore_console_mode();
         std::process::exit(1);
     }
 
     /// No SIGPIPE on Windows.
     pub fn restore_sigpipe() {}
 
-    /// Watch `CONIN$` for WINDOW_BUFFER_SIZE_EVENTs on a parked thread and set
-    /// the same TERMINAL_RESIZED flag SIGWINCH sets on Unix. `CONIN$` is opened
-    /// explicitly so this works even when stdin itself is a pipe
-    /// (`echo hi | ttfx`), which is the normal case.
+    /// Poll the terminal size on a parked thread and set the same
+    /// TERMINAL_RESIZED flag SIGWINCH sets on Unix. An event-driven watcher
+    /// would need the console input buffer (`ENABLE_WINDOW_INPUT`) and would
+    /// consume every record it reads — including keystrokes meant for the
+    /// shell. Polling costs one cheap query five times a second, works when
+    /// stdin is a pipe (the normal `echo hi | ttfx` case), and feeds the
+    /// shared `resize_settled()` debounce, so restarts stay as disciplined
+    /// as on Unix.
     pub fn install_sigwinch_handler() {
         std::thread::spawn(|| {
-            // SAFETY: minimal kernel32 console input pump; any failure ends
-            // the thread quietly — resize-restart just stays off.
-            unsafe { watch_for_resize() };
+            let mut last = current_size();
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let now = current_size();
+                if now != last {
+                    last = now;
+                    TERMINAL_RESIZED.store(true, Ordering::SeqCst);
+                }
+            }
         });
     }
 
-    unsafe fn watch_for_resize() {
-        const GENERIC_READ: Dword = 0x8000_0000;
-        const GENERIC_WRITE: Dword = 0x4000_0000;
-        const FILE_SHARE_READ: Dword = 1;
-        const FILE_SHARE_WRITE: Dword = 2;
-        const OPEN_EXISTING: Dword = 3;
-
-        // "CONIN$" as UTF-16 + NUL.
-        let name: [u16; 7] = [0x43, 0x4F, 0x4E, 0x49, 0x4E, 0x24, 0];
-        let conin = CreateFileW(
-            name.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            0,
-        );
-        if conin == 0 || conin == -1 {
-            return;
-        }
-        let mut record = InputRecord { event_type: 0, reserved: 0, payload: [0; 16] };
-        loop {
-            let mut read: Dword = 0;
-            let ok = ReadConsoleInputW(conin, &mut record, 1, &mut read);
-            if ok == 0 || read == 0 {
-                break;
-            }
-            if record.event_type == WINDOW_BUFFER_SIZE_EVENT {
-                TERMINAL_RESIZED.store(true, Ordering::SeqCst);
-            }
-        }
-        CloseHandle(conin);
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn set_resized_for_test() {
-        TERMINAL_RESIZED.store(true, Ordering::SeqCst);
+    fn current_size() -> Option<(u16, u16)> {
+        terminal_size::terminal_size().map(|(w, h)| (w.0, h.0))
     }
 }
 

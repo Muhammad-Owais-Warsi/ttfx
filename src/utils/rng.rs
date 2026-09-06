@@ -37,14 +37,14 @@ impl Rng {
         Rng::seeded(u64::from_le_bytes(buf))
     }
 
-    /// Windows entropy without new crates: `ProcessPrng` (bcryptprimitives,
-    /// Win8+) fills the seed directly. Never panics — on failure falls back
-    /// to a time+pid mix, which is plenty for visual effects.
+    /// Windows entropy without new crates: `RtlGenRandom` (`SystemFunction036`
+    /// in advapi32, present in every toolchain) fills the seed directly.
+    /// Never panics — on failure falls back to a time+pid mix, which is
+    /// plenty for visual effects.
     #[cfg(windows)]
     pub fn from_entropy() -> Self {
         Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
     }
-
 
 
     /// Core generator: xoshiro256++ next().

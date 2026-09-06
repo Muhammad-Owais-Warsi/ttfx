@@ -1,2 +1,8 @@
 tools/parity/cases.txt merge=union
 docs/ordering-inventory.md merge=union
+# Git for Windows checks out with CRLF by default, which breaks `sh` scripts
+# (and therefore the Windows CI job) before they test anything.
+*.sh text eol=lf
+bin/test text eol=lf
+bin/build text eol=lf
+bin/release text eol=lf

@@ -37,6 +37,27 @@ jobs:
           name: ttfx-aarch64-apple-darwin
           path: target/release/ttfx
 
+  test-windows:
+    name: Tests (Windows)
+    # Same contract as macOS: bin/test skips the Linux-pinned parity and pty
+    # suites off Linux, so this proves the port builds, unit tests green, and
+    # the CLI works on Windows with zero new dependencies.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: ./tools/tests/cli_corpus.sh
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ttfx-x86_64-pc-windows-msvc
+          path: target/release/ttfx.exe
+
   release-binary:
     name: Static musl binary
     runs-on: ubuntu-latest

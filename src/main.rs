@@ -39,6 +39,7 @@ fn forget_engine<E, C>(effect: E, ctx: C) {
 
 fn main() -> ExitCode {
     ttfx::restore_sigpipe();
+    ttfx::enable_ansi();
     let cli = cli::Cli::parse();
 
     // upstream prints the completion script and returns before any input handling

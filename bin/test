@@ -20,9 +20,11 @@ cargo test --release
 
 # The pty suites below are Unix-only: they import fcntl/pty/termios at module
 # scope and drive real POSIX signals, so they cannot even start on Windows
-# (Git for Windows reports MINGW64_NT/MSYS/CYGWIN here, never Linux).
+# (Git for Windows reports MINGW64_NT/MSYS/CYGWIN here). Skipping is by
+# Windows rather than by Linux so macOS keeps running them, as it always has.
 case "$(uname -s)" in
-Linux)
+MINGW*|MSYS*|CYGWIN*) ;;
+*)
   python3 tools/tests/sigterm_behavior.py
   python3 tools/tests/terminal_close_behavior.py
   ;;

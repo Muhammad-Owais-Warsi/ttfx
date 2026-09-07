@@ -40,10 +40,11 @@ jobs:
   test-windows:
     name: Tests (Windows)
     # bin/test is the single entry point like the other jobs: it skips the
-    # Linux-pinned parity and pty suites off Linux, so what runs here proves
-    # the port builds, unit tests green, and the CLI works on Windows with
-    # zero new dependencies. setup-python stays because bin/test requires a
-    # python3 binary to be present before it runs anything.
+    # Linux-pinned parity suites off Linux and the POSIX pty suites on
+    # Windows, so what runs here proves the port builds, unit tests green,
+    # and the CLI works on Windows with zero new dependencies. setup-python
+    # stays because bin/test requires a python3 binary to be present before
+    # it runs anything.
     runs-on: windows-latest
     defaults:
       run:

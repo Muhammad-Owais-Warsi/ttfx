@@ -53,8 +53,6 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-
-
     let input_data = match &cli.input_file {
         Some(path) => match std::fs::read(path) {
             Ok(bytes) => match String::from_utf8(bytes) {

@@ -293,15 +293,19 @@ mod windows {
     /// TERMINAL_RESIZED flag SIGWINCH sets on Unix. An event-driven watcher
     /// would need the console input buffer (`ENABLE_WINDOW_INPUT`) and would
     /// consume every record it reads — including keystrokes meant for the
-    /// shell. Polling costs one cheap query five times a second, works when
-    /// stdin is a pipe (the normal `echo hi | ttfx` case), and feeds the
-    /// shared `resize_settled()` debounce, so restarts stay as disciplined
-    /// as on Unix.
+    /// shell. The sample period stays below `resize_settled()`'s quiet window
+    /// so a sustained drag keeps pushing the timestamp forward and coalesces
+    /// into one restart, exactly like a burst of SIGWINCH on Unix. Works when
+    /// stdin is a pipe (the normal `echo hi | ttfx` case).
+    ///
+    /// The baseline is read on the calling thread: a resize landing between
+    /// the engine's own first sample and the watcher's would otherwise be
+    /// recorded as "no change" and missed until the next resize.
     pub fn install_sigwinch_handler() {
-        std::thread::spawn(|| {
-            let mut last = current_size();
+        let mut last = current_size();
+        std::thread::spawn(move || {
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::thread::sleep(std::time::Duration::from_millis(30));
                 let now = current_size();
                 if now != last {
                     last = now;

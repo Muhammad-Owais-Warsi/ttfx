@@ -46,7 +46,6 @@ impl Rng {
         Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
     }
 
-
     /// Core generator: xoshiro256++ next().
     fn next_u64(&mut self) -> u64 {
         let result = self.s[0].wrapping_add(self.s[3]).rotate_left(23).wrapping_add(self.s[0]);

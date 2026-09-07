@@ -97,7 +97,6 @@ impl Rng {
         Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
     }
 
-
     /// Core generator: xoshiro256++ next().
     #[inline]
     fn next_u64(&mut self) -> u64 {

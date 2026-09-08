@@ -76,13 +76,6 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Console mode is touched only for real runs (never for --help,
-    // --print-completion, parse errors or input errors) and restored by the
-    // guard on every exit path through normal control flow (`exit()` calls
-    // all happen before this point, except the SIGTERM path, which restores
-    // explicitly). No-op off Windows.
-    let _console_mode = ttfx::ConsoleModeGuard::enable();
-
     if cli.m0_dump {
         return m0_dump(&input_data, &cli);
     }
@@ -143,6 +136,14 @@ fn main() -> ExitCode {
         ttfx::install_sigterm_handler();
         ttfx::install_sigwinch_handler();
     }
+
+    // Console mode is touched only for real runs, after the signal handlers
+    // are installed so no Ctrl-C can land on default termination, and
+    // restored by the guard on every exit path through normal control flow
+    // (`exit()` calls all happen before this point, except the SIGTERM path,
+    // which restores explicitly). The hidden `--m0-dump` parity path above
+    // runs without it; its harness is Linux-only. No-op off Windows.
+    let _console_mode = ttfx::ConsoleModeGuard::enable();
 
     let result = loop {
         let clock = if cli.parity_dump || cli.virtual_clock {

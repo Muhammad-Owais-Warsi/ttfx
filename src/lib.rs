@@ -73,6 +73,10 @@ impl ConsoleModeGuard {
     pub fn enable() -> Self {
         #[cfg(windows)]
         windows::enable_virtual_terminal();
+        // `panic = "abort"` in release skips `Drop`, but panic hooks still
+        // run first — so the saved mode goes back even on that path.
+        #[cfg(windows)]
+        windows::install_panic_hook();
         ConsoleModeGuard { _priv: () }
     }
 }
@@ -236,6 +240,22 @@ mod windows {
             OUTPUT_MODE_SAVED.store(true, Ordering::SeqCst);
             let _ = SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
+    }
+
+    /// Restore the saved output mode from a panic hook. Hooks run before
+    /// `abort`, unlike `Drop`; chaining keeps any previously installed hook
+    /// (test harness, supervisor) alive. Re-entry safe via the same swap flag
+    /// the `Drop` path uses.
+    pub(super) fn install_panic_hook() {
+        use std::sync::Once;
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                restore_console_mode();
+                previous(info);
+            }));
+        });
     }
 
     pub(super) fn restore_console_mode() {

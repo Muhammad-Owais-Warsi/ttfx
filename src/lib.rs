@@ -71,12 +71,15 @@ pub struct ConsoleModeGuard {
 
 impl ConsoleModeGuard {
     pub fn enable() -> Self {
-        #[cfg(windows)]
-        windows::enable_virtual_terminal();
         // `panic = "abort"` in release skips `Drop`, but panic hooks still
-        // run first — so the saved mode goes back even on that path.
+        // run first — so the saved mode goes back even on that path. Arming
+        // the hook first leaves no window where the mode is changed and only
+        // the default hook is installed; the resize thread is already running
+        // by here, so that window is reachable rather than theoretical.
         #[cfg(windows)]
         windows::install_panic_hook();
+        #[cfg(windows)]
+        windows::enable_virtual_terminal();
         ConsoleModeGuard { _priv: () }
     }
 }
@@ -259,7 +262,7 @@ mod windows {
     }
 
     pub(super) fn restore_console_mode() {
-        if !OUTPUT_MODE_SAVED.swap(false, Ordering::SeqCst) {
+        if !OUTPUT_MODE_SAVED.load(Ordering::SeqCst) {
             return;
         }
         let saved = SAVED_OUTPUT_MODE.load(Ordering::SeqCst);
@@ -271,6 +274,11 @@ mod windows {
             }
             let _ = SetConsoleMode(out, saved);
         }
+        // Cleared last, so a caller that reads false knows the mode is already
+        // back. Clearing on entry let a second caller return early and exit the
+        // process while the first had not yet reached SetConsoleMode. Restoring
+        // twice writes the same saved mode, so the race this leaves is harmless.
+        OUTPUT_MODE_SAVED.store(false, Ordering::SeqCst);
     }
 
     /// Ctrl-C / Ctrl-Break sets INTERRUPTED so the run loop tears down the

@@ -204,11 +204,20 @@ impl Color {
 
     /// The color whose `color_arg.key()` is `key`: every field follows from
     /// the argument, as from_xterm and from_hex make it.
-    pub fn from_key(key: u64) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// `key` must be the `color_arg.key()` of a Color: either an xterm key
+    /// (top bit set), or a hex key whose low seven bytes start with `len`
+    /// (the top byte, at most 7) bytes of valid UTF-8. `RgbString`'s deref
+    /// trusts both without checking.
+    pub(crate) unsafe fn from_key(key: u64) -> Self {
         if key >> 63 != 0 {
             return Color::from_xterm(key as u8);
         }
         let b = key.to_le_bytes();
+        debug_assert!(b[7] <= 7, "from_key: hex length {} > 7", b[7]);
+        debug_assert!(std::str::from_utf8(&b[..(b[7] as usize).min(7)]).is_ok());
         let rgb_color = RgbString {
             bytes: [b[0], b[1], b[2], b[3], b[4], b[5], b[6]],
             len: b[7],

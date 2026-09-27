@@ -351,8 +351,9 @@ impl Engine {
                 let bit = 1u64 << (slot & 63);
                 // a batched step has a path, so no doze; only a callback
                 // changes another character's path (and the epoch)
-                if BATCH && batched & bit != 0 && self.motion_epoch == epoch {
-                    debug_assert!(self.batched(slot, epoch));
+                // the batch's step still stands: no callback since (epoch) and
+                // the slot still walks the path the batch stepped
+                if BATCH && batched & bit != 0 && self.batched(slot, epoch) {
                     if bare & bit != 0 {
                         self.bare_move(slot);
                     } else {

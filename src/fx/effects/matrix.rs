@@ -146,16 +146,16 @@ fn skip_misses(rng: &mut Rng, symbol: u64, color: u64, avx2: bool, max: usize) -
 /// compare is exact.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn skip_quads_avx2(draws: &[u64], symbol: u64, color: u64, max: usize) -> usize {
+fn skip_quads_avx2(draws: &[u64], symbol: u64, color: u64, max: usize) -> usize {
+    use crate::utils::simd::load_si256;
     use std::arch::x86_64::*;
     let t = _mm256_setr_epi64x(symbol as i64, color as i64, symbol as i64, color as i64);
     let pairs = draws.len() / 2;
-    let p = draws.as_ptr() as *const __m256i;
     let hit = |v: __m256i| _mm256_cmpgt_epi64(t, _mm256_srli_epi64::<11>(v));
     let mut k = 0;
     while k + 8 <= max && k + 8 <= pairs {
-        // SAFETY: draws k * 2 .. k * 2 + 16 are in the slice.
-        let v = unsafe { [0, 1, 2, 3].map(|i| _mm256_loadu_si256(p.add(k / 2 + i))) };
+        // draws k * 2 .. k * 2 + 16 are in the slice
+        let v = [0, 1, 2, 3].map(|i| load_si256(draws, k * 2 + i * 4));
         let any = _mm256_or_si256(_mm256_or_si256(hit(v[0]), hit(v[1])), _mm256_or_si256(hit(v[2]), hit(v[3])));
         if _mm256_testz_si256(any, any) == 0 {
             break;
@@ -163,8 +163,8 @@ unsafe fn skip_quads_avx2(draws: &[u64], symbol: u64, color: u64, max: usize) ->
         k += 8;
     }
     while k < max && k + 4 <= pairs {
-        // SAFETY: draws k * 2 .. k * 2 + 8 are in the slice.
-        let (a, b) = unsafe { (_mm256_loadu_si256(p.add(k / 2)), _mm256_loadu_si256(p.add(k / 2 + 1))) };
+        // draws k * 2 .. k * 2 + 8 are in the slice
+        let (a, b) = (load_si256(draws, k * 2), load_si256(draws, k * 2 + 4));
         let (a, b) = (hit(a), hit(b));
         // bit 2j: character j's symbol draw hits, bit 2j + 1: its color draw
         let mask =

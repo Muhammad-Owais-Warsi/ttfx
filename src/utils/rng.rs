@@ -131,14 +131,14 @@ impl Rng {
     /// A batch of eight lanes side by side (see Rng).
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx512f")]
-    unsafe fn refill_lanes(&mut self, ends: [[u64; LANES]; 4]) {
+    fn refill_lanes(&mut self, ends: [[u64; LANES]; 4]) {
+        use super::simd::{load_si512, store_si256, store_si512};
         use std::arch::x86_64::*;
         // the jump: each lane's start is the XOR of the rows of its end
         // state's set bits
         let mut s = [_mm512_setzero_si512(); 4];
         for w in 0..4 {
-            // SAFETY: `ends[w]` is eight u64s.
-            let end = unsafe { _mm512_loadu_si512(ends[w].as_ptr() as *const _) };
+            let end = load_si512(&ends[w], 0);
             for b in 0..64 {
                 let k = _mm512_test_epi64_mask(end, _mm512_set1_epi64(1 << b));
                 let row = &JUMP[w * 64 + b];
@@ -152,7 +152,6 @@ impl Rng {
         // four outputs (lane i in qword i) into four consecutive draws a lane
         let idx_lo = _mm512_setr_epi64(0, 1, 8, 9, 2, 3, 10, 11);
         let idx_hi = _mm512_setr_epi64(4, 5, 12, 13, 6, 7, 14, 15);
-        let base = self.batch.as_mut_ptr();
         for j in (0..LANE).step_by(4) {
             let mut out = [_mm512_setzero_si512(); 4];
             for o in &mut out {
@@ -175,17 +174,14 @@ impl Rng {
                 (_mm512_permutex2var_epi64(u1, idx_hi, u3), 5, 7),
             ];
             for (v, lo, hi) in quads {
-                // SAFETY: lane blocks are LANE draws and j + 4 <= LANE.
-                unsafe {
-                    _mm256_storeu_si256(base.add(lo * LANE + j) as *mut __m256i, _mm512_castsi512_si256(v));
-                    _mm256_storeu_si256(base.add(hi * LANE + j) as *mut __m256i, _mm512_extracti64x4_epi64::<1>(v));
-                }
+                // lane blocks are LANE draws and j + 4 <= LANE
+                store_si256(&mut self.batch[..], lo * LANE + j, _mm512_castsi512_si256(v));
+                store_si256(&mut self.batch[..], hi * LANE + j, _mm512_extracti64x4_epi64::<1>(v));
             }
         }
         let mut lanes = [[0u64; LANES]; 4];
         for (w, v) in [s0, s1, s2, s3].into_iter().enumerate() {
-            // SAFETY: `lanes[w]` is eight u64s.
-            unsafe { _mm512_storeu_si512(lanes[w].as_mut_ptr() as *mut _, v) };
+            store_si512(&mut lanes[w], 0, v);
         }
         // lane 7's end is where the whole batch leaves the stream
         self.s = [lanes[0][7], lanes[1][7], lanes[2][7], lanes[3][7]];

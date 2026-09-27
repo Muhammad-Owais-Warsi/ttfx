@@ -32,6 +32,7 @@
 
 use crate::engine::terminal::Terminal;
 use crate::utils::geometry::Coord;
+use crate::utils::simd::{load, store};
 
 use super::visual::{Span, VisualPool, COPY_BLOCK};
 use super::{At, Engine, Sym, Symbols, Visual, CF_VISIBLE, NONE};
@@ -634,14 +635,14 @@ impl Render {
     /// render_rows for x86-64-v3: the fixed copies are single 32-byte moves.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,bmi1,bmi2,popcnt,lzcnt")]
-    unsafe fn render_rows_v3(&mut self) {
+    fn render_rows_v3(&mut self) {
         self.render_rows_body();
     }
 
     /// render_rows compiled for x86-64-v4: 64-byte copies are single moves.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx2,bmi1,bmi2,popcnt,lzcnt")]
-    unsafe fn render_rows_v4(&mut self) {
+    fn render_rows_v4(&mut self) {
         self.render_rows_body();
     }
 
@@ -734,8 +735,8 @@ impl Render {
                 // bytes: the tail's first bytes are saved before the tail moves
                 // and put back after. Past the row's end is free.
                 assert!(old_end.max(start + n) + COPY_BLOCK <= current.bytes.len());
-                // SAFETY: in bounds (checked above); an unaligned read.
-                let saved = unsafe { std::ptr::read_unaligned(current.bytes.as_ptr().add(old_end) as *const [u8; COPY_BLOCK]) };
+                // in bounds (checked above)
+                let saved: [u8; COPY_BLOCK] = load(&current.bytes, old_end);
                 if n != old {
                     current.bytes.copy_within(old_end..current.len, start + n);
                     current.len = current.len + n - old;
@@ -745,8 +746,7 @@ impl Render {
                 let keep = start + n;
                 let len = emit(pool, &cells[..end], &mut current.bytes, &mut current.offs, b, start);
                 debug_assert_eq!(len, keep);
-                // SAFETY: in bounds (checked above); an unaligned write.
-                unsafe { std::ptr::write_unaligned(current.bytes.as_mut_ptr().add(keep) as *mut [u8; COPY_BLOCK], saved) };
+                store(&mut current.bytes, keep, saved);
             }
         }
         r.all_dirty = false;
@@ -929,12 +929,10 @@ fn copy_clean(prev: &Row, next: &mut Row, from: usize, to: usize, len: usize) ->
     let delta = (len as u32).wrapping_sub(start as u32);
     let mut i = from;
     while i < to {
-        // SAFETY: every offs array has OFFS_RUN entries past the row's
-        // blocks, so the run-over stays inside it.
-        unsafe {
-            let s = std::ptr::read_unaligned(prev.offs.as_ptr().add(i) as *const [u32; OFFS_RUN]);
-            std::ptr::write_unaligned(next.offs.as_mut_ptr().add(i) as *mut [u32; OFFS_RUN], s.map(|o| o.wrapping_add(delta)));
-        }
+        // every offs array has OFFS_RUN entries past the row's blocks, so
+        // the run-over stays inside it
+        let s: [u32; OFFS_RUN] = load(&prev.offs, i);
+        store(&mut next.offs, i, s.map(|o| o.wrapping_add(delta)));
         i += OFFS_RUN;
     }
     debug_assert!(start + run.next_multiple_of(COPY_BLOCK) <= prev.bytes.len());
@@ -959,11 +957,9 @@ fn shift_offs(offs: &mut [u32], from: usize, to: usize, delta: u32) {
     debug_assert!(to + OFFS_RUN - 1 <= offs.len());
     let mut i = from;
     while i < to {
-        // SAFETY: the run-over stays inside the OFFS_RUN slack entries.
-        unsafe {
-            let p = offs.as_mut_ptr().add(i) as *mut [u32; OFFS_RUN];
-            std::ptr::write_unaligned(p, std::ptr::read_unaligned(p).map(|o| o.wrapping_add(delta)));
-        }
+        // the run-over stays inside the OFFS_RUN slack entries
+        let s: [u32; OFFS_RUN] = load(offs, i);
+        store(offs, i, s.map(|o| o.wrapping_add(delta)));
         i += OFFS_RUN;
     }
 }

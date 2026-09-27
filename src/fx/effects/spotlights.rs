@@ -574,14 +574,9 @@ impl Spotlights {
                         let index = self.packed.len() as u32;
                         self.packed.push(packed);
                         let len = self.vdense.len();
+                        // inside the capacity (reserved for every pair)
                         assert!(len + self.syms <= self.vdense.capacity());
-                        // SAFETY: inside the capacity (reserved for every
-                        // pair), and all-ones bytes are Visual(NONE)
-                        // (repr(transparent) u32).
-                        unsafe {
-                            std::ptr::write_bytes(self.vdense.as_mut_ptr().add(len), 0xff, self.syms);
-                            self.vdense.set_len(len + self.syms);
-                        }
+                        self.vdense.resize(len + self.syms, Visual(NONE));
                         self.pair_index.insert(at, 0, packed, index);
                         index
                     }

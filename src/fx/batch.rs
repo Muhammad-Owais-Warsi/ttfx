@@ -128,6 +128,33 @@ fn tier() -> u8 {
     0
 }
 
+/// Lanes of `v` with every bit of `bits` set: all ones, else zero.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+fn all_set4(v: std::arch::x86_64::__m256i, bits: std::arch::x86_64::__m256i) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::*;
+    _mm256_cmpeq_epi64(_mm256_and_si256(v, bits), bits)
+}
+
+/// Bits 0-3 of `lanes` as a lane mask.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+fn lane_mask4(lanes: u32) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::*;
+    all_set4(_mm256_set1_epi64x(lanes as i64), _mm256_setr_epi64x(1, 2, 4, 8))
+}
+
+/// The sign bits of four i32 lanes.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+fn signs4(v: std::arch::x86_64::__m128i) -> u32 {
+    use std::arch::x86_64::*;
+    _mm_movemask_ps(_mm_castsi128_ps(v)) as u32
+}
+
 impl Batch {
     /// The scalar step of lane `k` (slot base + k); its bit when done.
     #[inline(always)]
@@ -225,9 +252,10 @@ impl Engine {
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
-    unsafe fn motion_batch_avx2(&mut self, w: usize, snapshot: u64) -> u64 {
+    fn motion_batch_avx2(&mut self, w: usize, snapshot: u64) -> u64 {
         use std::arch::x86_64::*;
         use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
+        use crate::utils::simd::{load, load_pd, load_si128, load2_si256, maskstore_pd, store_pd, store_si128};
 
         let (m, etab) = self.paths.mirrors_etab();
         let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
@@ -235,142 +263,131 @@ impl Engine {
         let b = &mut self.batch;
         let mut done = 0u64;
         let base = w * 64;
-        // SAFETY: every group read lies inside the mirror arrays (sized to
-        // whole groups of 8 past every slot) and inside ch.path, ch.coord
-        // and ch.scene (checked; Coord is repr(C), two i64s);
-        // the gather reads etab only at lanes whose mirror names a table
-        // offset whose entries run past the step (step <= max_steps).
-        unsafe {
-            let one = _mm256_set1_pd(1.0);
-            let zero = _mm256_setzero_pd();
-            let none = _mm_set1_epi32(NONE as i32);
-            let int_min = _mm_set1_epi32(i32::MIN);
-            let mut groups = snapshot;
-            while groups != 0 {
-                let g = groups.trailing_zeros() as usize / 4;
-                let lanes = (groups >> (g * 4)) as u32 & 0xf;
-                groups &= !(0xfu64 << (g * 4));
-                let s = base + g * 4;
-                if s + 4 > ch_path.len() {
-                    continue;
+        // every group lies inside the mirror arrays (sized to whole groups of
+        // 8 past every slot) and inside ch.path, ch.coord and ch.scene
+        // (checked)
+        let one = _mm256_set1_pd(1.0);
+        let zero = _mm256_setzero_pd();
+        let none = _mm_set1_epi32(NONE as i32);
+        let int_min = _mm_set1_epi32(i32::MIN);
+        let mut groups = snapshot;
+        while groups != 0 {
+            let g = groups.trailing_zeros() as usize / 4;
+            let lanes = (groups >> (g * 4)) as u32 & 0xf;
+            groups &= !(0xfu64 << (g * 4));
+            let s = base + g * 4;
+            if s + 4 > ch_path.len() {
+                continue;
+            }
+            debug_assert!(s + 4 <= m.path.len());
+            let mp = load_si128(&m.path, s);
+            let cp = load_si128(ch_path, s);
+            let mirrored = _mm_andnot_si128(_mm_cmpeq_epi32(mp, none), _mm_cmpeq_epi32(mp, cp));
+            let lanes = lanes & signs4(mirrored);
+            if lanes == 0 {
+                continue;
+            }
+            if lanes & (lanes - 1) == 0 {
+                // one lane: the scalar step is cheaper
+                let k = g * 4 + lanes.trailing_zeros() as usize;
+                let bit = b.one(m, etab, base, k);
+                if bit != 0 {
+                    b.classify(m, ch_coord, ch_scene, base, k);
                 }
-                debug_assert!(s + 4 <= m.path.len());
-                let mp = _mm_loadu_si128(m.path.as_ptr().add(s) as *const __m128i);
-                let cp = _mm_loadu_si128(ch_path.as_ptr().add(s) as *const __m128i);
-                let mirrored = _mm_andnot_si128(_mm_cmpeq_epi32(mp, none), _mm_cmpeq_epi32(mp, cp));
-                let lanes = lanes & _mm_movemask_ps(_mm_castsi128_ps(mirrored)) as u32;
-                if lanes == 0 {
-                    continue;
+                done |= bit;
+                continue;
+            }
+            let step = _mm256_add_pd(load_pd(&m.step, s), one);
+            let max = load_pd(&m.max, s);
+            let valid = _mm256_cmp_pd::<_CMP_LE_OQ>(step, max);
+            let tab = load_si128(&m.etab, s);
+            let linear = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_cmpeq_epi32(tab, _mm_setzero_si128())));
+            let live = _mm256_castsi256_pd(lane_mask4(lanes));
+            let gather = _mm256_and_pd(_mm256_andnot_pd(linear, valid), live);
+            let ratio = _mm256_div_pd(step, max);
+            let factor = if _mm256_movemask_pd(gather) == 0 {
+                ratio
+            } else {
+                let index = _mm_add_epi32(tab, _mm256_cvttpd_epi32(step));
+                // SAFETY: the gather reads etab only at lanes whose mirror
+                // names a table offset whose entries run past the step
+                // (step <= max_steps).
+                let eased = unsafe { _mm256_mask_i32gather_pd::<8>(zero, etab.as_ptr(), index, gather) };
+                _mm256_blendv_pd(eased, ratio, linear)
+            };
+            let total = load_pd(&m.total, s);
+            let d = _mm256_mul_pd(factor, total);
+            let off = load_pd(&m.off, s);
+            let hi = load_pd(&m.hi, s);
+            let flags = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(i32::from_ne_bytes(load(&m.flags, s))));
+            let flag = |bit: u8| _mm256_castsi256_pd(all_set4(flags, _mm256_set1_epi64x(bit as i64)));
+            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let r = _mm256_sub_pd(d, off);
+            let within = _mm256_or_pd(_mm256_cmp_pd::<_CMP_LE_OQ>(r, hi), over);
+            let r = _mm256_blendv_pd(r, _mm256_add_pd(r, hi), over);
+            let above = _mm256_or_pd(_mm256_andnot_pd(lower, _mm256_castsi256_pd(_mm256_set1_epi64x(-1))), _mm256_cmp_pd::<_CMP_GT_OQ>(d, off));
+            let ok = _mm256_and_pd(_mm256_and_pd(valid, within), above);
+            // t = r / hi (0 for an empty segment; a linear ratio at most
+            // 1.0, and min picks 1.0 over NaN as f64::min does)
+            let q = _mm256_div_pd(r, hi);
+            let t = _mm256_blendv_pd(q, _mm256_min_pd(q, one), clamp);
+            let t = _mm256_andnot_pd(_mm256_cmp_pd::<_CMP_EQ_OQ>(hi, zero), t);
+            let u = _mm256_sub_pd(one, t);
+            let lerp = |a: __m256d, b: __m256d| _mm256_add_pd(_mm256_mul_pd(u, a), _mm256_mul_pd(t, b));
+            // a line's control is its end: one lerp unless a lane curves
+            let curves = _mm256_movemask_pd(_mm256_and_pd(curve, live)) != 0;
+            let point = |start: &[f64], control: &[f64], end: &[f64]| {
+                let (a, e) = (load_pd(start, s), load_pd(end, s));
+                let line = lerp(a, e);
+                if !curves {
+                    return _mm256_cvtpd_epi32(line);
                 }
-                if lanes & (lanes - 1) == 0 {
-                    // one lane: the scalar step is cheaper
-                    let k = g * 4 + lanes.trailing_zeros() as usize;
-                    let bit = b.one(m, etab, base, k);
-                    if bit != 0 {
-                        b.classify(m, ch_coord, ch_scene, base, k);
-                    }
-                    done |= bit;
-                    continue;
-                }
-                let step = _mm256_add_pd(_mm256_loadu_pd(m.step.as_ptr().add(s)), one);
-                let max = _mm256_loadu_pd(m.max.as_ptr().add(s));
-                let valid = _mm256_cmp_pd::<_CMP_LE_OQ>(step, max);
-                let tab = _mm_loadu_si128(m.etab.as_ptr().add(s) as *const __m128i);
-                let linear = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_cmpeq_epi32(tab, _mm_setzero_si128())));
-                let bit = _mm256_setr_epi64x(1, 2, 4, 8);
-                let live = _mm256_castsi256_pd(_mm256_cmpeq_epi64(_mm256_and_si256(_mm256_set1_epi64x(lanes as i64), bit), bit));
-                let gather = _mm256_and_pd(_mm256_andnot_pd(linear, valid), live);
-                let ratio = _mm256_div_pd(step, max);
-                let factor = if _mm256_movemask_pd(gather) == 0 {
-                    ratio
-                } else {
-                    let index = _mm_add_epi32(tab, _mm256_cvttpd_epi32(step));
-                    let eased = _mm256_mask_i32gather_pd::<8>(zero, etab.as_ptr(), index, gather);
-                    _mm256_blendv_pd(eased, ratio, linear)
-                };
-                let total = _mm256_loadu_pd(m.total.as_ptr().add(s));
-                let d = _mm256_mul_pd(factor, total);
-                let off = _mm256_loadu_pd(m.off.as_ptr().add(s));
-                let hi = _mm256_loadu_pd(m.hi.as_ptr().add(s));
-                let flags = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(i32::from_ne_bytes(
-                    std::ptr::read_unaligned(m.flags.as_ptr().add(s) as *const [u8; 4]),
-                )));
-                let flag = |bit: u8| {
-                    let v = _mm256_set1_epi64x(bit as i64);
-                    _mm256_castsi256_pd(_mm256_cmpeq_epi64(_mm256_and_si256(flags, v), v))
-                };
-                let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
-                let r = _mm256_sub_pd(d, off);
-                let within = _mm256_or_pd(_mm256_cmp_pd::<_CMP_LE_OQ>(r, hi), over);
-                let r = _mm256_blendv_pd(r, _mm256_add_pd(r, hi), over);
-                let above = _mm256_or_pd(_mm256_andnot_pd(lower, _mm256_castsi256_pd(_mm256_set1_epi64x(-1))), _mm256_cmp_pd::<_CMP_GT_OQ>(d, off));
-                let ok = _mm256_and_pd(_mm256_and_pd(valid, within), above);
-                // t = r / hi (0 for an empty segment; a linear ratio at most
-                // 1.0, and min picks 1.0 over NaN as f64::min does)
-                let q = _mm256_div_pd(r, hi);
-                let t = _mm256_blendv_pd(q, _mm256_min_pd(q, one), clamp);
-                let t = _mm256_andnot_pd(_mm256_cmp_pd::<_CMP_EQ_OQ>(hi, zero), t);
-                let u = _mm256_sub_pd(one, t);
-                let lerp = |a: __m256d, b: __m256d| _mm256_add_pd(_mm256_mul_pd(u, a), _mm256_mul_pd(t, b));
-                // a line's control is its end: one lerp unless a lane curves
-                let curves = _mm256_movemask_pd(_mm256_and_pd(curve, live)) != 0;
-                let point = |start: *const f64, control: *const f64, end: *const f64| {
-                    let (a, e) = (_mm256_loadu_pd(start.add(s)), _mm256_loadu_pd(end.add(s)));
-                    let line = lerp(a, e);
-                    if !curves {
-                        return _mm256_cvtpd_epi32(line);
-                    }
-                    let c = _mm256_loadu_pd(control.add(s));
-                    let bent = lerp(lerp(a, c), lerp(c, e));
-                    _mm256_cvtpd_epi32(_mm256_blendv_pd(line, bent, curve))
-                };
-                let x = point(m.sx.as_ptr(), m.cx.as_ptr(), m.ex.as_ptr());
-                let y = point(m.sy.as_ptr(), m.cy.as_ptr(), m.ey.as_ptr());
-                let wide = _mm_or_si128(_mm_cmpeq_epi32(x, int_min), _mm_cmpeq_epi32(y, int_min));
-                let lanes = lanes
-                    & _mm256_movemask_pd(ok) as u32
-                    & !(_mm_movemask_ps(_mm_castsi128_ps(wide)) as u32);
-                let k = g * 4;
-                _mm256_storeu_pd(b.step.as_mut_ptr().add(k), step);
-                _mm256_storeu_pd(b.d.as_mut_ptr().add(k), d);
-                let taken = _mm256_cmpeq_epi64(_mm256_and_si256(_mm256_set1_epi64x(lanes as i64), bit), bit);
-                _mm256_storeu_pd(b.old.as_mut_ptr().add(k), _mm256_loadu_pd(m.last.as_ptr().add(s)));
-                _mm256_maskstore_pd(m.step.as_mut_ptr().add(s), taken, step);
-                _mm256_maskstore_pd(m.last.as_mut_ptr().add(s), taken, d);
-                _mm_storeu_si128(b.x.as_mut_ptr().add(k) as *mut __m128i, x);
-                _mm_storeu_si128(b.y.as_mut_ptr().add(k) as *mut __m128i, y);
-                done |= (lanes as u64) << k;
-                let pairs = ch_coord.as_ptr().add(s) as *const __m256i;
-                let (c0, c1) = (_mm256_loadu_si256(pairs), _mm256_loadu_si256(pairs.add(1)));
-                let cols = _mm256_permute4x64_epi64::<0xd8>(_mm256_unpacklo_epi64(c0, c1));
-                let rows = _mm256_permute4x64_epi64::<0xd8>(_mm256_unpackhi_epi64(c0, c1));
-                let same = _mm256_and_si256(
-                    _mm256_cmpeq_epi64(cols, _mm256_cvtepi32_epi64(x)),
-                    _mm256_cmpeq_epi64(rows, _mm256_cvtepi32_epi64(y)),
-                );
-                let same = _mm256_movemask_pd(_mm256_castsi256_pd(same)) as u32;
-                let on = lanes & _mm256_movemask_pd(_mm256_cmp_pd::<_CMP_NEQ_UQ>(step, max)) as u32;
-                let scene = _mm_loadu_si128(ch_scene.as_ptr().add(s) as *const __m128i);
-                let bare = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(scene, none))) as u32;
-                b.idle |= ((on & same & bare) as u64) << k;
-                b.quiet |= ((on & same & !bare) as u64) << k;
-                b.bare |= ((on & !same & bare) as u64) << k;
-                if m.synced {
-                    // step_synced_scene's frame index at the new step
-                    let key = _mm_loadu_si128(m.sync.as_ptr().add(s) as *const __m128i);
-                    let by_step = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(key));
-                    let ratio_step = _mm256_div_pd(_mm256_max_pd(step, one), _mm256_max_pd(max, one));
-                    let whole = _mm256_max_pd(total, one);
-                    let remaining = _mm256_max_pd(_mm256_sub_pd(total, d), one);
-                    let ratio_d = _mm256_div_pd(_mm256_max_pd(_mm256_sub_pd(whole, remaining), one), whole);
-                    let ratio = _mm256_blendv_pd(ratio_d, ratio_step, by_step);
-                    let last = _mm_sub_epi32(_mm_and_si128(key, _mm_set1_epi32(i32::MAX)), _mm_set1_epi32(1));
-                    let index = _mm256_cvtpd_epi32(_mm256_mul_pd(_mm256_cvtepi32_pd(last), ratio));
-                    let unknown = _mm_cmpeq_epi32(index, int_min);
-                    let index = _mm_max_epi32(_mm_min_epi32(index, last), _mm_setzero_si128());
-                    let index = _mm_blendv_epi8(index, int_min, unknown);
-                    _mm_storeu_si128(b.sidx.as_mut_ptr().add(k) as *mut __m128i, index);
-                }
+                let c = load_pd(control, s);
+                let bent = lerp(lerp(a, c), lerp(c, e));
+                _mm256_cvtpd_epi32(_mm256_blendv_pd(line, bent, curve))
+            };
+            let x = point(&m.sx, &m.cx, &m.ex);
+            let y = point(&m.sy, &m.cy, &m.ey);
+            let wide = _mm_or_si128(_mm_cmpeq_epi32(x, int_min), _mm_cmpeq_epi32(y, int_min));
+            let lanes = lanes & _mm256_movemask_pd(ok) as u32 & !signs4(wide);
+            let k = g * 4;
+            store_pd(&mut b.step, k, step);
+            store_pd(&mut b.d, k, d);
+            let taken = lane_mask4(lanes);
+            store_pd(&mut b.old, k, load_pd(&m.last, s));
+            maskstore_pd(&mut m.step, s, taken, step);
+            maskstore_pd(&mut m.last, s, taken, d);
+            store_si128(&mut b.x, k, x);
+            store_si128(&mut b.y, k, y);
+            done |= (lanes as u64) << k;
+            let [c0, c1] = load2_si256(ch_coord, s);
+            let cols = _mm256_permute4x64_epi64::<0xd8>(_mm256_unpacklo_epi64(c0, c1));
+            let rows = _mm256_permute4x64_epi64::<0xd8>(_mm256_unpackhi_epi64(c0, c1));
+            let same = _mm256_and_si256(
+                _mm256_cmpeq_epi64(cols, _mm256_cvtepi32_epi64(x)),
+                _mm256_cmpeq_epi64(rows, _mm256_cvtepi32_epi64(y)),
+            );
+            let same = _mm256_movemask_pd(_mm256_castsi256_pd(same)) as u32;
+            let on = lanes & _mm256_movemask_pd(_mm256_cmp_pd::<_CMP_NEQ_UQ>(step, max)) as u32;
+            let bare = signs4(_mm_cmpeq_epi32(load_si128(ch_scene, s), none));
+            b.idle |= ((on & same & bare) as u64) << k;
+            b.quiet |= ((on & same & !bare) as u64) << k;
+            b.bare |= ((on & !same & bare) as u64) << k;
+            if m.synced {
+                // step_synced_scene's frame index at the new step
+                let key = load_si128(&m.sync, s);
+                let by_step = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(key));
+                let ratio_step = _mm256_div_pd(_mm256_max_pd(step, one), _mm256_max_pd(max, one));
+                let whole = _mm256_max_pd(total, one);
+                let remaining = _mm256_max_pd(_mm256_sub_pd(total, d), one);
+                let ratio_d = _mm256_div_pd(_mm256_max_pd(_mm256_sub_pd(whole, remaining), one), whole);
+                let ratio = _mm256_blendv_pd(ratio_d, ratio_step, by_step);
+                let last = _mm_sub_epi32(_mm_and_si128(key, _mm_set1_epi32(i32::MAX)), _mm_set1_epi32(1));
+                let index = _mm256_cvtpd_epi32(_mm256_mul_pd(_mm256_cvtepi32_pd(last), ratio));
+                let unknown = _mm_cmpeq_epi32(index, int_min);
+                let index = _mm_max_epi32(_mm_min_epi32(index, last), _mm_setzero_si128());
+                let index = _mm_blendv_epi8(index, int_min, unknown);
+                store_si128(&mut b.sidx, k, index);
             }
         }
         done
@@ -378,9 +395,10 @@ impl Engine {
 
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx512f,avx512vl,avx2")]
-    unsafe fn motion_batch_avx512(&mut self, w: usize, snapshot: u64) -> u64 {
+    fn motion_batch_avx512(&mut self, w: usize, snapshot: u64) -> u64 {
         use std::arch::x86_64::*;
         use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
+        use crate::utils::simd::{load, load_pd8, load_si256, load2_si512, mask_store_pd8, store_pd8, store_si256};
 
         let (m, etab) = self.paths.mirrors_etab();
         let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
@@ -388,134 +406,131 @@ impl Engine {
         let b = &mut self.batch;
         let mut done = 0u64;
         let base = w * 64;
-        // SAFETY: as for motion_batch_avx2, with groups of 8 (the mirror
-        // arrays are whole words long).
-        unsafe {
-            let one = _mm512_set1_pd(1.0);
-            let zero = _mm512_setzero_pd();
-            let none = _mm256_set1_epi32(NONE as i32);
-            let int_min = _mm256_set1_epi32(i32::MIN);
-            let mut groups = snapshot;
-            while groups != 0 {
-                let g = groups.trailing_zeros() as usize / 8;
-                let lanes = (groups >> (g * 8)) as u8;
-                groups &= !(0xffu64 << (g * 8));
-                let s = base + g * 8;
-                if s + 8 > ch_path.len() {
-                    let mut l = lanes;
-                    while l != 0 {
-                        let k = g * 8 + l.trailing_zeros() as usize;
-                        l &= l - 1;
-                        if base + k < ch_path.len() && m.path[base + k] != NONE && m.path[base + k] == ch_path[base + k] {
-                            let bit = b.one(m, etab, base, k);
-                            if bit != 0 {
-                                b.classify(m, ch_coord, ch_scene, base, k);
-                            }
-                            done |= bit;
+        // as for motion_batch_avx2, with groups of 8 (the mirror arrays are
+        // whole words long)
+        let one = _mm512_set1_pd(1.0);
+        let zero = _mm512_setzero_pd();
+        let none = _mm256_set1_epi32(NONE as i32);
+        let int_min = _mm256_set1_epi32(i32::MIN);
+        let mut groups = snapshot;
+        while groups != 0 {
+            let g = groups.trailing_zeros() as usize / 8;
+            let lanes = (groups >> (g * 8)) as u8;
+            groups &= !(0xffu64 << (g * 8));
+            let s = base + g * 8;
+            if s + 8 > ch_path.len() {
+                let mut l = lanes;
+                while l != 0 {
+                    let k = g * 8 + l.trailing_zeros() as usize;
+                    l &= l - 1;
+                    if base + k < ch_path.len() && m.path[base + k] != NONE && m.path[base + k] == ch_path[base + k] {
+                        let bit = b.one(m, etab, base, k);
+                        if bit != 0 {
+                            b.classify(m, ch_coord, ch_scene, base, k);
                         }
+                        done |= bit;
                     }
-                    continue;
                 }
-                debug_assert!(s + 8 <= m.path.len());
-                let mp = _mm256_loadu_si256(m.path.as_ptr().add(s) as *const __m256i);
-                let cp = _mm256_loadu_si256(ch_path.as_ptr().add(s) as *const __m256i);
-                let lanes = lanes & _mm256_cmpeq_epi32_mask(mp, cp) & _mm256_cmpneq_epi32_mask(mp, none);
-                if lanes == 0 {
-                    continue;
+                continue;
+            }
+            debug_assert!(s + 8 <= m.path.len());
+            let mp = load_si256(&m.path, s);
+            let cp = load_si256(ch_path, s);
+            let lanes = lanes & _mm256_cmpeq_epi32_mask(mp, cp) & _mm256_cmpneq_epi32_mask(mp, none);
+            if lanes == 0 {
+                continue;
+            }
+            if lanes & (lanes - 1) == 0 {
+                let k = g * 8 + lanes.trailing_zeros() as usize;
+                let bit = b.one(m, etab, base, k);
+                if bit != 0 {
+                    b.classify(m, ch_coord, ch_scene, base, k);
                 }
-                if lanes & (lanes - 1) == 0 {
-                    let k = g * 8 + lanes.trailing_zeros() as usize;
-                    let bit = b.one(m, etab, base, k);
-                    if bit != 0 {
-                        b.classify(m, ch_coord, ch_scene, base, k);
-                    }
-                    done |= bit;
-                    continue;
+                done |= bit;
+                continue;
+            }
+            let step = _mm512_add_pd(load_pd8(&m.step, s), one);
+            let max = load_pd8(&m.max, s);
+            let valid = _mm512_cmp_pd_mask::<_CMP_LE_OQ>(step, max);
+            let tab = load_si256(&m.etab, s);
+            let linear = _mm256_cmpeq_epi32_mask(tab, _mm256_setzero_si256());
+            let ratio = _mm512_div_pd(step, max);
+            let gather = !linear & valid & lanes;
+            let factor = if gather == 0 {
+                ratio
+            } else {
+                let index = _mm256_add_epi32(tab, _mm512_cvttpd_epi32(step));
+                // SAFETY: as for motion_batch_avx2.
+                let eased = unsafe { _mm512_mask_i32gather_pd::<8>(zero, gather, index, etab.as_ptr()) };
+                _mm512_mask_blend_pd(linear, eased, ratio)
+            };
+            let total = load_pd8(&m.total, s);
+            let d = _mm512_mul_pd(factor, total);
+            let off = load_pd8(&m.off, s);
+            let hi = load_pd8(&m.hi, s);
+            let flags = _mm512_cvtepu8_epi64(_mm_cvtsi64_si128(i64::from_ne_bytes(load(&m.flags, s))));
+            let flag = |bit: u8| _mm512_test_epi64_mask(flags, _mm512_set1_epi64(bit as i64));
+            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let r = _mm512_sub_pd(d, off);
+            let within = _mm512_cmp_pd_mask::<_CMP_LE_OQ>(r, hi) | over;
+            let r = _mm512_mask_add_pd(r, over, r, hi);
+            let above = !lower | _mm512_cmp_pd_mask::<_CMP_GT_OQ>(d, off);
+            let ok = valid & within & above;
+            // t = r / hi (0 for an empty segment; a linear ratio at most
+            // 1.0, and min picks 1.0 over NaN as f64::min does)
+            let q = _mm512_div_pd(r, hi);
+            let t = _mm512_mask_blend_pd(clamp, q, _mm512_min_pd(q, one));
+            let t = _mm512_mask_blend_pd(_mm512_cmp_pd_mask::<_CMP_EQ_OQ>(hi, zero), t, zero);
+            let u = _mm512_sub_pd(one, t);
+            let lerp = |a: __m512d, b: __m512d| _mm512_add_pd(_mm512_mul_pd(u, a), _mm512_mul_pd(t, b));
+            let curves = curve & lanes != 0;
+            let point = |start: &[f64], control: &[f64], end: &[f64]| {
+                let (a, e) = (load_pd8(start, s), load_pd8(end, s));
+                let line = lerp(a, e);
+                if !curves {
+                    return _mm512_cvtpd_epi32(line);
                 }
-                let step = _mm512_add_pd(_mm512_loadu_pd(m.step.as_ptr().add(s)), one);
-                let max = _mm512_loadu_pd(m.max.as_ptr().add(s));
-                let valid = _mm512_cmp_pd_mask::<_CMP_LE_OQ>(step, max);
-                let tab = _mm256_loadu_si256(m.etab.as_ptr().add(s) as *const __m256i);
-                let linear = _mm256_cmpeq_epi32_mask(tab, _mm256_setzero_si256());
-                let ratio = _mm512_div_pd(step, max);
-                let gather = !linear & valid & lanes;
-                let factor = if gather == 0 {
-                    ratio
-                } else {
-                    let index = _mm256_add_epi32(tab, _mm512_cvttpd_epi32(step));
-                    let eased = _mm512_mask_i32gather_pd::<8>(zero, gather, index, etab.as_ptr());
-                    _mm512_mask_blend_pd(linear, eased, ratio)
-                };
-                let total = _mm512_loadu_pd(m.total.as_ptr().add(s));
-                let d = _mm512_mul_pd(factor, total);
-                let off = _mm512_loadu_pd(m.off.as_ptr().add(s));
-                let hi = _mm512_loadu_pd(m.hi.as_ptr().add(s));
-                let flags = _mm512_cvtepu8_epi64(_mm_loadl_epi64(m.flags.as_ptr().add(s) as *const __m128i));
-                let flag = |bit: u8| _mm512_test_epi64_mask(flags, _mm512_set1_epi64(bit as i64));
-                let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
-                let r = _mm512_sub_pd(d, off);
-                let within = _mm512_cmp_pd_mask::<_CMP_LE_OQ>(r, hi) | over;
-                let r = _mm512_mask_add_pd(r, over, r, hi);
-                let above = !lower | _mm512_cmp_pd_mask::<_CMP_GT_OQ>(d, off);
-                let ok = valid & within & above;
-                // t = r / hi (0 for an empty segment; a linear ratio at most
-                // 1.0, and min picks 1.0 over NaN as f64::min does)
-                let q = _mm512_div_pd(r, hi);
-                let t = _mm512_mask_blend_pd(clamp, q, _mm512_min_pd(q, one));
-                let t = _mm512_mask_blend_pd(_mm512_cmp_pd_mask::<_CMP_EQ_OQ>(hi, zero), t, zero);
-                let u = _mm512_sub_pd(one, t);
-                let lerp = |a: __m512d, b: __m512d| _mm512_add_pd(_mm512_mul_pd(u, a), _mm512_mul_pd(t, b));
-                let curves = curve & lanes != 0;
-                let point = |start: *const f64, control: *const f64, end: *const f64| {
-                    let (a, e) = (_mm512_loadu_pd(start.add(s)), _mm512_loadu_pd(end.add(s)));
-                    let line = lerp(a, e);
-                    if !curves {
-                        return _mm512_cvtpd_epi32(line);
-                    }
-                    let c = _mm512_loadu_pd(control.add(s));
-                    let bent = lerp(lerp(a, c), lerp(c, e));
-                    _mm512_cvtpd_epi32(_mm512_mask_blend_pd(curve, line, bent))
-                };
-                let x = point(m.sx.as_ptr(), m.cx.as_ptr(), m.ex.as_ptr());
-                let y = point(m.sy.as_ptr(), m.cy.as_ptr(), m.ey.as_ptr());
-                let wide = _mm256_cmpeq_epi32_mask(x, int_min) | _mm256_cmpeq_epi32_mask(y, int_min);
-                let lanes = lanes & ok & !wide;
-                let k = g * 8;
-                _mm512_storeu_pd(b.step.as_mut_ptr().add(k), step);
-                _mm512_storeu_pd(b.d.as_mut_ptr().add(k), d);
-                _mm512_storeu_pd(b.old.as_mut_ptr().add(k), _mm512_loadu_pd(m.last.as_ptr().add(s)));
-                _mm512_mask_storeu_pd(m.step.as_mut_ptr().add(s), lanes, step);
-                _mm512_mask_storeu_pd(m.last.as_mut_ptr().add(s), lanes, d);
-                _mm256_storeu_si256(b.x.as_mut_ptr().add(k) as *mut __m256i, x);
-                _mm256_storeu_si256(b.y.as_mut_ptr().add(k) as *mut __m256i, y);
-                done |= (lanes as u64) << k;
-                let pairs = ch_coord.as_ptr().add(s) as *const i64;
-                let (c0, c1) = (_mm512_loadu_epi64(pairs), _mm512_loadu_epi64(pairs.add(8)));
-                let cols = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14), c1);
-                let rows = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15), c1);
-                let same = _mm512_cmpeq_epi64_mask(cols, _mm512_cvtepi32_epi64(x))
-                    & _mm512_cmpeq_epi64_mask(rows, _mm512_cvtepi32_epi64(y));
-                let on = lanes & _mm512_cmp_pd_mask::<_CMP_NEQ_UQ>(step, max);
-                let scene = _mm256_loadu_si256(ch_scene.as_ptr().add(s) as *const __m256i);
-                let bare = _mm256_cmpeq_epi32_mask(scene, none);
-                b.idle |= ((on & same & bare) as u64) << k;
-                b.quiet |= ((on & same & !bare) as u64) << k;
-                b.bare |= ((on & !same & bare) as u64) << k;
-                if m.synced {
-                    let key = _mm256_loadu_si256(m.sync.as_ptr().add(s) as *const __m256i);
-                    let by_step = _mm256_cmplt_epi32_mask(key, _mm256_setzero_si256());
-                    let ratio_step = _mm512_div_pd(_mm512_max_pd(step, one), _mm512_max_pd(max, one));
-                    let whole = _mm512_max_pd(total, one);
-                    let remaining = _mm512_max_pd(_mm512_sub_pd(total, d), one);
-                    let ratio_d = _mm512_div_pd(_mm512_max_pd(_mm512_sub_pd(whole, remaining), one), whole);
-                    let ratio = _mm512_mask_blend_pd(by_step, ratio_d, ratio_step);
-                    let last = _mm256_sub_epi32(_mm256_and_si256(key, _mm256_set1_epi32(i32::MAX)), _mm256_set1_epi32(1));
-                    let index = _mm512_cvtpd_epi32(_mm512_mul_pd(_mm512_cvtepi32_pd(last), ratio));
-                    let unknown = _mm256_cmpeq_epi32_mask(index, int_min);
-                    let index = _mm256_max_epi32(_mm256_min_epi32(index, last), _mm256_setzero_si256());
-                    let index = _mm256_mask_mov_epi32(index, unknown, int_min);
-                    _mm256_storeu_si256(b.sidx.as_mut_ptr().add(k) as *mut __m256i, index);
-                }
+                let c = load_pd8(control, s);
+                let bent = lerp(lerp(a, c), lerp(c, e));
+                _mm512_cvtpd_epi32(_mm512_mask_blend_pd(curve, line, bent))
+            };
+            let x = point(&m.sx, &m.cx, &m.ex);
+            let y = point(&m.sy, &m.cy, &m.ey);
+            let wide = _mm256_cmpeq_epi32_mask(x, int_min) | _mm256_cmpeq_epi32_mask(y, int_min);
+            let lanes = lanes & ok & !wide;
+            let k = g * 8;
+            store_pd8(&mut b.step, k, step);
+            store_pd8(&mut b.d, k, d);
+            store_pd8(&mut b.old, k, load_pd8(&m.last, s));
+            mask_store_pd8(&mut m.step, s, lanes, step);
+            mask_store_pd8(&mut m.last, s, lanes, d);
+            store_si256(&mut b.x, k, x);
+            store_si256(&mut b.y, k, y);
+            done |= (lanes as u64) << k;
+            let [c0, c1] = load2_si512(ch_coord, s);
+            let cols = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14), c1);
+            let rows = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15), c1);
+            let same = _mm512_cmpeq_epi64_mask(cols, _mm512_cvtepi32_epi64(x))
+                & _mm512_cmpeq_epi64_mask(rows, _mm512_cvtepi32_epi64(y));
+            let on = lanes & _mm512_cmp_pd_mask::<_CMP_NEQ_UQ>(step, max);
+            let bare = _mm256_cmpeq_epi32_mask(load_si256(ch_scene, s), none);
+            b.idle |= ((on & same & bare) as u64) << k;
+            b.quiet |= ((on & same & !bare) as u64) << k;
+            b.bare |= ((on & !same & bare) as u64) << k;
+            if m.synced {
+                let key = load_si256(&m.sync, s);
+                let by_step = _mm256_cmplt_epi32_mask(key, _mm256_setzero_si256());
+                let ratio_step = _mm512_div_pd(_mm512_max_pd(step, one), _mm512_max_pd(max, one));
+                let whole = _mm512_max_pd(total, one);
+                let remaining = _mm512_max_pd(_mm512_sub_pd(total, d), one);
+                let ratio_d = _mm512_div_pd(_mm512_max_pd(_mm512_sub_pd(whole, remaining), one), whole);
+                let ratio = _mm512_mask_blend_pd(by_step, ratio_d, ratio_step);
+                let last = _mm256_sub_epi32(_mm256_and_si256(key, _mm256_set1_epi32(i32::MAX)), _mm256_set1_epi32(1));
+                let index = _mm512_cvtpd_epi32(_mm512_mul_pd(_mm512_cvtepi32_pd(last), ratio));
+                let unknown = _mm256_cmpeq_epi32_mask(index, int_min);
+                let index = _mm256_max_epi32(_mm256_min_epi32(index, last), _mm256_setzero_si256());
+                let index = _mm256_mask_mov_epi32(index, unknown, int_min);
+                store_si256(&mut b.sidx, k, index);
             }
         }
         done

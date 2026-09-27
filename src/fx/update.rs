@@ -96,7 +96,12 @@ fn wake_mask(bytes: &[u8; 64], value: u8) -> u64 {
         let m3 = _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_loadu_si128(p.add(3)), v)) as u16 as u64;
         m0 | m1 << 16 | m2 << 32 | m3 << 48
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    // SAFETY: NEON is baseline on aarch64.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        wake_mask_neon(bytes, value)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let mut mask = 0;
         for (i, &b) in bytes.iter().enumerate() {
@@ -104,6 +109,16 @@ fn wake_mask(bytes: &[u8; 64], value: u8) -> u64 {
         }
         mask
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+fn wake_mask_neon(bytes: &[u8; 64], value: u8) -> u64 {
+    use crate::utils::simd::{bits_u8x64, load_u8x64};
+    use std::arch::aarch64::*;
+    let (v, q) = (vdupq_n_u8(value), load_u8x64(bytes, 0));
+    bits_u8x64(uint8x16x4_t(vceqq_u8(q.0, v), vceqq_u8(q.1, v), vceqq_u8(q.2, v), vceqq_u8(q.3, v)))
 }
 
 impl Engine {
@@ -257,6 +272,23 @@ impl Engine {
     /// BaseEffectIterator.update: tick a snapshot of the active set in
     /// ascending order, then prune.
     pub fn update(&mut self, hooks: &mut dyn Hooks) {
+        let (on, timed) = self.batch.plan();
+        let start = if timed { Some(std::time::Instant::now()) } else { None };
+        if on {
+            self.update_with::<true>(hooks);
+        } else {
+            self.update_with::<false>(hooks);
+        }
+        if let Some(start) = start {
+            self.batch.timed(on, start.elapsed().as_nanos() as u64);
+        }
+    }
+
+    /// update, with or without motion_batch: without it the batched paths
+    /// are compiled out of the tick loop. Two functions, not inlined: one
+    /// body twice in update crowds out the inlining the tick loop needs.
+    #[inline(never)]
+    fn update_with<const BATCH: bool>(&mut self, hooks: &mut dyn Hooks) {
         let a = &mut self.active;
         let (lo, hi) = (a.lo as usize, a.hi as usize);
         a.count = a.count.wrapping_add(1);
@@ -280,8 +312,8 @@ impl Engine {
             }
             let epoch = self.motion_epoch;
             let mirrored = word & *self.paths.m.bits.at(w);
-            let batched = if mirrored != 0 { self.motion_batch(w, mirrored) } else { 0 };
-            let (idle, bare) = if mirrored != 0 { (self.batch.idle, self.batch.bare) } else { (0, 0) };
+            let batched = if BATCH && mirrored != 0 { self.motion_batch(w, mirrored) } else { 0 };
+            let (idle, bare) = if BATCH && mirrored != 0 { (self.batch.idle, self.batch.bare) } else { (0, 0) };
             self.batch.live = batched;
             *self.active.snapshot.at_mut(w) &= !idle;
             loop {
@@ -296,7 +328,7 @@ impl Engine {
                 let bit = 1u64 << (slot & 63);
                 // a batched step has a path, so no doze; only a callback
                 // changes another character's path (and the epoch)
-                if batched & bit != 0 && self.motion_epoch == epoch {
+                if BATCH && batched & bit != 0 && self.motion_epoch == epoch {
                     debug_assert!(self.batched(slot, epoch));
                     if bare & bit != 0 {
                         self.bare_move(slot);
@@ -378,5 +410,25 @@ impl Engine {
         }
         a.lo = lo as u32;
         a.hi = hi as u32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wake_mask;
+
+    #[test]
+    fn wake_mask_matches_scalar() {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..10_000 {
+            let mut bytes = [0u8; 64];
+            for b in &mut bytes {
+                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                *b = (x >> 61) as u8;
+            }
+            let value = (x >> 40) as u8 & 7;
+            let want = bytes.iter().enumerate().fold(0u64, |m, (i, &b)| m | ((b == value) as u64) << i);
+            assert_eq!(wake_mask(&bytes, value), want);
+        }
     }
 }

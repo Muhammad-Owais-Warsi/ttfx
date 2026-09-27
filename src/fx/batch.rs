@@ -31,8 +31,10 @@
 //! (`take_sync_index`), sparing step_synced_scene its divides and the path
 //! record.
 //!
-//! Below x86-64-v3 there is no batch: every step goes through the scalar
-//! `mirror_step` or the walk.
+//! On aarch64 a NEON kernel takes the lanes two at a time (fcvtns for
+//! cvtpd2dq, with NaN lanes left to the scalar step as well), and whether
+//! update runs it is timed as it goes (`Adapt`). Below x86-64-v3 there is no
+//! batch: every step goes through the scalar `mirror_step` or the walk.
 
 use crate::utils::geometry::Coord;
 use crate::utils::pycompat::round_half_even;
@@ -66,12 +68,59 @@ pub struct Batch {
     pub(super) live: u64,
     /// The slot whose tick takes its synced frame index from `sidx`, NONE.
     pub(super) hint: u32,
-    /// The kernel the CPU runs: 0 none, 3 AVX2, 4 AVX-512.
+    /// The kernel the CPU runs: 0 none, 2 NEON, 3 AVX2, 4 AVX-512.
     tier: u8,
+    /// Whether update runs the kernel.
+    adapt: Adapt,
+}
+
+/// Whether update runs motion_batch. With the x86 kernels it always does.
+/// The NEON kernel pays for itself only where enough ticks come back idle,
+/// which depends on the effect and its phase, so the choice is timed: every
+/// CYCLE updates the first PROBE run in pairs, one with the batch and the
+/// next without, each pair a vote for the faster, and the winner runs the
+/// rest of the cycle. (Votes, not summed times: a pair's two updates have
+/// nearly the same work, and one slow outlier moves one vote.) The run's
+/// first update, which pays for cold caches, is not timed. Either way the
+/// output is the same. TTFX_NEON=on/off/flip (flip: switch every update, for
+/// testing) overrides.
+struct Adapt {
+    policy: u8,
+    on: bool,
+    /// Updates into the cycle (CYCLE before the first update).
+    n: u32,
+    /// The pair's update with the batch took this many nanoseconds.
+    with: u64,
+    /// Pairs faster with the batch less those faster without.
+    votes: i32,
+}
+
+const POLICY_OFF: u8 = 0;
+const POLICY_ON: u8 = 1;
+const POLICY_TIMED: u8 = 2;
+const POLICY_FLIP: u8 = 3;
+const CYCLE: u32 = 256;
+const PROBE: u32 = 16;
+
+impl Adapt {
+    fn new(tier: u8) -> Self {
+        let policy = match tier {
+            0 => POLICY_OFF,
+            2 => match std::env::var("TTFX_NEON").ok().as_deref() {
+                Some("on") => POLICY_ON,
+                Some("off") => POLICY_OFF,
+                Some("flip") => POLICY_FLIP,
+                _ => POLICY_TIMED,
+            },
+            _ => POLICY_ON,
+        };
+        Adapt { policy, on: policy != POLICY_OFF, n: CYCLE, with: 0, votes: 0 }
+    }
 }
 
 impl Default for Batch {
     fn default() -> Self {
+        let tier = tier();
         Batch {
             step: [0.0; 64],
             d: [0.0; 64],
@@ -84,7 +133,8 @@ impl Default for Batch {
             bare: 0,
             live: 0,
             hint: NONE,
-            tier: tier(),
+            tier,
+            adapt: Adapt::new(tier),
         }
     }
 }
@@ -124,6 +174,10 @@ fn tier() -> u8 {
         if has!("avx2") {
             return 3;
         }
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::env::var_os("TTFX_NO_NEON").is_none() {
+        return 2;
     }
     0
 }
@@ -208,6 +262,44 @@ impl Batch {
         }
     }
 
+    /// Whether this update runs the batch, and whether it is timed for
+    /// `timed` (see Adapt).
+    #[inline(always)]
+    pub(super) fn plan(&mut self) -> (bool, bool) {
+        let a = &mut self.adapt;
+        match a.policy {
+            POLICY_OFF => (false, false),
+            POLICY_ON => (true, false),
+            POLICY_FLIP => {
+                a.on = !a.on;
+                (a.on, false)
+            }
+            _ => {
+                let n = a.n;
+                a.n = if n + 1 >= CYCLE { 0 } else { n + 1 };
+                if n < PROBE {
+                    return (n & 1 == 0, true);
+                }
+                if n == PROBE {
+                    a.on = a.votes >= 0;
+                    a.votes = 0;
+                }
+                (a.on, false)
+            }
+        }
+    }
+
+    /// A probing update took `nanos`.
+    #[inline(always)]
+    pub(super) fn timed(&mut self, on: bool, nanos: u64) {
+        let a = &mut self.adapt;
+        if on {
+            a.with = nanos;
+        } else {
+            a.votes += if a.with <= nanos { 1 } else { -1 };
+        }
+    }
+
     /// The synced frame index motion_batch worked out for this tick of
     /// `slot`, if it is the tick the batch was for; NO_INDEX otherwise.
     #[inline(always)]
@@ -236,6 +328,9 @@ impl Engine {
             // SAFETY: as above.
             #[cfg(target_arch = "x86_64")]
             3 => unsafe { self.motion_batch_avx2(w, snapshot) },
+            // SAFETY: NEON is baseline on aarch64.
+            #[cfg(target_arch = "aarch64")]
+            2 => unsafe { self.motion_batch_neon(w, snapshot) },
             _ => return 0,
         };
         let mut quiet = self.batch.quiet;
@@ -247,6 +342,159 @@ impl Engine {
                 self.batch.idle |= 1 << k;
             }
         }
+        done
+    }
+
+    /// motion_batch_avx2 two lanes at a time with NEON. There is no gather
+    /// (the eased lanes are loads) and fcvtns rounds as cvtpd2dq; lanes that
+    /// round outside i32, or to i32::MIN, or are NaN are left to the scalar
+    /// step. Kept out of update, whose tick loop it would crowd.
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    #[inline(never)]
+    fn motion_batch_neon(&mut self, w: usize, snapshot: u64) -> u64 {
+        use std::arch::aarch64::*;
+        use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
+        use crate::utils::simd::{
+            bits_u64x2 as bits, lane_mask2, load, load_f64x2, load_split_s64x2, load_u32x2, store_f64x2, store_u32x2,
+            widen_mask2,
+        };
+
+        let (m, etab) = self.paths.mirrors_etab();
+        let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
+        assert!(ch_coord.len() == ch_path.len() && ch_scene.len() == ch_path.len());
+        let b = &mut self.batch;
+        let (mut done, mut idle, mut quiet, mut bare) = (0u64, 0u64, 0u64, 0u64);
+        let base = w * 64;
+        // every pair lies inside the mirror arrays (whole words long) and
+        // inside ch.path, ch.coord and ch.scene (checked)
+        let one = vdupq_n_f64(1.0);
+        let zero = vdupq_n_f64(0.0);
+        let none = vdup_n_u32(NONE);
+        let int_min = vdupq_n_s64(i32::MIN as i64);
+        let int_max = vdupq_n_s64(i32::MAX as i64);
+        // x rounds (to r) inside i32 above i32::MIN, and is not NaN
+        let fits = |x: float64x2_t, r: int64x2_t| {
+            vandq_u64(vceqq_f64(x, x), vandq_u64(vcgtq_s64(r, int_min), vcleq_s64(r, int_max)))
+        };
+        let mut pairs = snapshot;
+        while pairs != 0 {
+            let k = pairs.trailing_zeros() as usize & !1;
+            let lanes = (pairs >> k) as u32 & 3;
+            pairs &= !(3u64 << k);
+            let s = base + k;
+            if s + 2 > ch_path.len() {
+                // the last character: the scalar step
+                if lanes & 1 != 0 && m.path[s] != NONE && m.path[s] == ch_path[s] {
+                    let bit = b.one(m, etab, base, k);
+                    if bit != 0 {
+                        b.classify(m, ch_coord, ch_scene, base, k);
+                    }
+                    done |= bit;
+                }
+                continue;
+            }
+            let mp = load_u32x2(&m.path, s);
+            let mirrored = vbic_u32(vceq_u32(mp, load_u32x2(ch_path, s)), vceq_u32(mp, none));
+            let lanes = lanes & bits(widen_mask2(mirrored));
+            if lanes == 0 {
+                continue;
+            }
+            let live = lane_mask2(lanes);
+            let step = vaddq_f64(load_f64x2(&m.step, s), one);
+            let max = load_f64x2(&m.max, s);
+            let valid = vcleq_f64(step, max);
+            let tab: [u32; 2] = load(&m.etab, s);
+            let linear = widen_mask2(vceqz_u32(load_u32x2(&m.etab, s)));
+            let ratio = vdivq_f64(step, max);
+            let gather = bits(vbicq_u64(vandq_u64(valid, live), linear));
+            let factor = if gather == 0 {
+                ratio
+            } else {
+                // the eased lanes' factors (the table runs past the step:
+                // step <= max_steps)
+                let mut eased = [0.0; 2];
+                for j in 0..2 {
+                    if gather >> j & 1 != 0 {
+                        eased[j] = etab[tab[j] as usize + (m.step[s + j] + 1.0) as usize];
+                    }
+                }
+                vbslq_f64(linear, ratio, load_f64x2(&eased, 0))
+            };
+            let total = load_f64x2(&m.total, s);
+            let d = vmulq_f64(factor, total);
+            let off = load_f64x2(&m.off, s);
+            let hi = load_f64x2(&m.hi, s);
+            let [f0, f1]: [u8; 2] = load(&m.flags, s);
+            let flags = vcombine_u64(vcreate_u64(f0 as u64), vcreate_u64(f1 as u64));
+            let flag = |bit: u8| vtstq_u64(flags, vdupq_n_u64(bit as u64));
+            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let r = vsubq_f64(d, off);
+            let within = vorrq_u64(vcleq_f64(r, hi), over);
+            let r = vbslq_f64(over, vaddq_f64(r, hi), r);
+            let above = vorrq_u64(vreinterpretq_u64_u32(vmvnq_u32(vreinterpretq_u32_u64(lower))), vcgtq_f64(d, off));
+            let ok = vandq_u64(vandq_u64(valid, within), above);
+            // t = r / hi (0 for an empty segment; a linear ratio at most
+            // 1.0, and fminnm picks 1.0 over NaN as f64::min does)
+            let q = vdivq_f64(r, hi);
+            let t = vbslq_f64(clamp, vminnmq_f64(q, one), q);
+            let t = vbslq_f64(vceqq_f64(hi, zero), zero, t);
+            let u = vsubq_f64(one, t);
+            let lerp = |a: float64x2_t, b: float64x2_t| vaddq_f64(vmulq_f64(u, a), vmulq_f64(t, b));
+            // a line's control is its end: one lerp unless a lane curves
+            let curves = bits(vandq_u64(curve, live)) != 0;
+            let point = |start: &[f64], control: &[f64], end: &[f64]| {
+                let (a, e) = (load_f64x2(start, s), load_f64x2(end, s));
+                let line = lerp(a, e);
+                if !curves {
+                    return line;
+                }
+                let c = load_f64x2(control, s);
+                vbslq_f64(curve, lerp(lerp(a, c), lerp(c, e)), line)
+            };
+            let (x, y) = (point(&m.sx, &m.cx, &m.ex), point(&m.sy, &m.cy, &m.ey));
+            let (xi, yi) = (vcvtnq_s64_f64(x), vcvtnq_s64_f64(y));
+            let taken = vandq_u64(vandq_u64(ok, live), vandq_u64(fits(x, xi), fits(y, yi)));
+            let lanes = bits(taken);
+            store_f64x2(&mut b.step, k, step);
+            store_f64x2(&mut b.d, k, d);
+            let last = load_f64x2(&m.last, s);
+            store_f64x2(&mut b.old, k, last);
+            let kept = load_f64x2(&m.step, s);
+            store_f64x2(&mut m.step, s, vbslq_f64(taken, step, kept));
+            store_f64x2(&mut m.last, s, vbslq_f64(taken, d, last));
+            store_u32x2(&mut b.x, k, vreinterpret_u32_s32(vmovn_s64(xi)));
+            store_u32x2(&mut b.y, k, vreinterpret_u32_s32(vmovn_s64(yi)));
+            done |= (lanes as u64) << k;
+            let c = load_split_s64x2(ch_coord, s);
+            let same = bits(vandq_u64(vceqq_s64(c.0, xi), vceqq_s64(c.1, yi)));
+            let on = lanes & !bits(vceqq_f64(step, max));
+            let no_scene = bits(widen_mask2(vceq_u32(load_u32x2(ch_scene, s), none)));
+            idle |= ((on & same & no_scene) as u64) << k;
+            quiet |= ((on & same & !no_scene) as u64) << k;
+            bare |= ((on & !same & no_scene) as u64) << k;
+            if m.synced {
+                // step_synced_scene's frame index at the new step
+                let key = vreinterpret_s32_u32(load_u32x2(&m.sync, s));
+                let by_step = vcltzq_s64(vmovl_s32(key));
+                let ratio_step = vdivq_f64(vmaxnmq_f64(step, one), vmaxnmq_f64(max, one));
+                let whole = vmaxnmq_f64(total, one);
+                let remaining = vmaxnmq_f64(vsubq_f64(total, d), one);
+                let ratio_d = vdivq_f64(vmaxnmq_f64(vsubq_f64(whole, remaining), one), whole);
+                let ratio = vbslq_f64(by_step, ratio_step, ratio_d);
+                let last = vmovl_s32(vsub_s32(vand_s32(key, vdup_n_s32(i32::MAX)), vdup_n_s32(1)));
+                let f = vmulq_f64(vcvtq_f64_s64(last), ratio);
+                let index = vcvtnq_s64_f64(f);
+                let known = fits(f, index);
+                let index = vbslq_s64(vcltq_s64(index, last), index, last);
+                let index = vbslq_s64(vcgtzq_s64(index), index, vdupq_n_s64(0));
+                let index = vbslq_s64(known, index, int_min);
+                store_u32x2(&mut b.sidx, k, vreinterpret_u32_s32(vmovn_s64(index)));
+            }
+        }
+        b.idle = idle;
+        b.quiet = quiet;
+        b.bare = bare;
         done
     }
 

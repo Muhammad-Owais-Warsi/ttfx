@@ -906,7 +906,12 @@ fn prefetch<T>(value: *const T) {
         use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
         _mm_prefetch::<_MM_HINT_T0>(value as *const i8);
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: prfm is a hint; any address is allowed.
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) value, options(nostack, readonly, preserves_flags));
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let _ = value;
 }
 

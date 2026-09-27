@@ -824,7 +824,12 @@ fn chunk_blocks(chunk: &mut [u8]) -> u32 {
         }
         !clean & 0xffff
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    // SAFETY: NEON is baseline on aarch64.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        chunk_blocks_neon(chunk)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let mut m = 0u32;
         for (i, block) in chunk.chunks_exact(4).enumerate() {
@@ -833,6 +838,26 @@ fn chunk_blocks(chunk: &mut [u8]) -> u32 {
         chunk.fill(0);
         m
     }
+}
+
+/// chunk_blocks with NEON: a byte per block (dirty when its u32 lane is not
+/// zero), then one bit per byte.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+#[inline]
+fn chunk_blocks_neon(chunk: &mut [u8]) -> u32 {
+    use crate::utils::simd::{bits_u8x16, load_u8x64, store_u8x64};
+    use std::arch::aarch64::*;
+    let q = load_u8x64(chunk, 0);
+    let dirty = |v: uint8x16_t| {
+        let v = vreinterpretq_u32_u8(v);
+        vmovn_u32(vtstq_u32(v, v))
+    };
+    let lo = vcombine_u16(dirty(q.0), dirty(q.1));
+    let hi = vcombine_u16(dirty(q.2), dirty(q.3));
+    let zero = vdupq_n_u8(0);
+    store_u8x64(chunk, 0, uint8x16x4_t(zero, zero, zero, zero));
+    bits_u8x16(vcombine_u8(vmovn_u16(lo), vmovn_u16(hi)))
 }
 
 /// The dirty runs of blocks [b, e) of a row's bitmap (with the sentinel at
@@ -1093,5 +1118,26 @@ impl std::io::Write for RawStdout {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::chunk_blocks;
+
+    #[test]
+    fn chunk_blocks_matches_scalar() {
+        let mut x = 0xda94_2042_e4dd_58b5u64;
+        for _ in 0..10_000 {
+            let mut chunk = [0u8; 64];
+            for b in &mut chunk {
+                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                // mostly zero, so blocks come out both clean and dirty
+                *b = if x >> 60 == 0 { (x >> 32) as u8 | 1 } else { 0 };
+            }
+            let want = chunk.chunks_exact(4).enumerate().fold(0u32, |m, (i, c)| m | ((c != [0; 4]) as u32) << i);
+            assert_eq!(chunk_blocks(&mut chunk), want);
+            assert_eq!(chunk, [0; 64]);
+        }
     }
 }

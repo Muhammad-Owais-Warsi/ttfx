@@ -19,6 +19,16 @@ pub fn round_half_even(x: f64) -> i64 {
             return r;
         }
     }
+    // frintn + fcvtzs (baseline on aarch64) are round_ties_even + the
+    // saturating cast, which the routine below is for every value but +inf
+    // (it wraps that to i64::MIN): i64::MAX takes the routine.
+    #[cfg(target_arch = "aarch64")]
+    {
+        let r = x.round_ties_even() as i64;
+        if r != i64::MAX {
+            return r;
+        }
+    }
     round_half_even_slow(x)
 }
 

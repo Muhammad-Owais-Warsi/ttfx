@@ -49,6 +49,9 @@ Reproduce it with `python3 tools/tests/bench_full.py`, or set `TTFX_BENCH_COLS`,
 and `TTFX_BENCH_FILL=1` for the fullscreen numbers above. Both sides run their real user-facing
 command, best of five.
 
+For energy rather than speed, `python3 tools/tests/bench_energy.py [effect ...]` reports the
+joules one paced run costs, read from the CPU's RAPL counters (Linux, needs root to read them).
+
 ## The effects
 
 All 37, each animating the Omarchy logo. Every frame below came out of the Rust binary — and is

@@ -66,20 +66,23 @@ struct CellMap {
     row_offset: i64,
     column_offset: i64,
     bottom: i64,
-    top: i64,
     left: i64,
-    right: i64,
+    /// Rows and columns in the visible window, 0 when it is empty (the
+    /// terminal can report a top below the bottom, e.g. under LINES=0).
+    rows: u64,
+    columns: u64,
 }
 
 impl CellMap {
     /// The grid cell showing this coordinate, or NONE outside the window.
     #[inline(always)]
     fn cell_of(&self, coord: Coord) -> u32 {
-        // unsigned: bottom <= row <= top and left <= column <= right
+        // unsigned: bottom <= row <= top and left <= column <= right; an
+        // empty window has 0 rows or columns and matches nothing
         let row = coord.row.wrapping_add(self.row_offset);
         let column = coord.column.wrapping_add(self.column_offset);
-        if (row.wrapping_sub(self.bottom) as u64) <= (self.top - self.bottom) as u64
-            && (column.wrapping_sub(self.left) as u64) <= (self.right - self.left) as u64
+        if (row.wrapping_sub(self.bottom) as u64) < self.rows
+            && (column.wrapping_sub(self.left) as u64) < self.columns
         {
             ((row - 1) as usize * self.stride + (column - 1) as usize) as u32
         } else {
@@ -108,9 +111,9 @@ impl Front {
                 row_offset: terminal.canvas_row_offset,
                 column_offset: terminal.canvas_column_offset,
                 bottom: terminal.visible_bottom,
-                top: terminal.visible_top,
                 left: terminal.visible_left,
-                right: terminal.visible_right,
+                rows: (terminal.visible_top - terminal.visible_bottom + 1).max(0) as u64,
+                columns: (terminal.visible_right - terminal.visible_left + 1).max(0) as u64,
             },
             log: Vec::with_capacity(1 << 16),
             back: Some(Box::new(back)),

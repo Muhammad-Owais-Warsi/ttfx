@@ -7,7 +7,6 @@
 //! algorithm without updating the shim in lockstep.
 
 use super::rng_jump::{JUMP, JUMP_STEPS};
-use crate::fx::At;
 
 /// A batch is LANES runs of LANE consecutive draws.
 const LANE: usize = 512;
@@ -234,13 +233,14 @@ impl Rng {
         let mut pos = self.pos;
         let mut k = 0;
         while k < len {
-            if pos == BATCH {
+            // `>=`, not `==`: then pos < BATCH below is plain to the
+            // compiler, and neither index is checked
+            if pos >= BATCH {
                 self.refill();
                 pos = 0;
             }
-            // pos < BATCH and k < len here
-            let r = *self.batch.at(pos) >> shift;
-            *out.at_mut(k) = r as u16;
+            let r = self.batch[pos] >> shift;
+            out[k] = r as u16;
             k += (r < n) as usize;
             pos += 1;
         }
@@ -265,14 +265,14 @@ impl Rng {
         let mut k = 0;
         let mut odd = 0u64;
         while k < len {
-            if pos == BATCH {
+            // as in fill_below: neither index is checked
+            if pos >= BATCH {
                 self.refill();
                 pos = 0;
             }
             let mask = odd.wrapping_neg();
-            // pos < BATCH and k < len here
-            let r = *self.batch.at(pos) >> (sa ^ (sx & mask as u32));
-            *out.at_mut(k) = r as u16;
+            let r = self.batch[pos] >> (sa ^ (sx & mask as u32));
+            out[k] = r as u16;
             let accept = (r < (a ^ (nx & mask))) as u64;
             k += accept as usize;
             odd ^= accept;

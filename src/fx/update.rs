@@ -349,9 +349,17 @@ impl Engine {
                 let slot = (w as u32) << 6 | m.trailing_zeros();
                 self.active.cursor = slot;
                 let bit = 1u64 << (slot & 63);
-                // a batched step has a path, so no doze; only a callback
-                // changes another character's path (and the epoch)
-                if BATCH && batched & bit != 0 && self.motion_epoch == epoch {
+                // a batched step has a path, so no doze. Its result stands
+                // while no callback ran since the batch (the epoch: only a
+                // callback changes another character's path) and the slot's
+                // mirror does (a tick can drop another's mirror, see batch.rs);
+                // the mirror bit is the word the batch read, so this costs
+                // one hot load where the full check below cost fireworks 2%
+                if BATCH
+                    && batched & bit != 0
+                    && self.motion_epoch == epoch
+                    && *self.paths.m.bits.at(w) & bit != 0
+                {
                     debug_assert!(self.batched(slot, epoch));
                     if bare & bit != 0 {
                         self.bare_move(slot);

@@ -179,12 +179,14 @@ impl BreadthFirst {
             return tail..tail;
         }
         for i in head..tail {
+            // in bounds: tail is the queue's length
             let position = *self.queue.at(i);
-            for &link in links.0.at(position) {
+            // the slots are checked: once per character, not a hot path
+            for &link in &links.0[position as usize] {
                 if link == NONE {
                     break;
                 }
-                let explored = self.explored.at_mut(link);
+                let explored = &mut self.explored[link as usize];
                 if !*explored {
                     *explored = true;
                     self.queue.push(link);
@@ -385,8 +387,9 @@ impl Effect for Smoke {
         if !self.fill.complete {
             let explored = self.fill.step(&self.links);
             for i in explored {
+                // in bounds: step returns a range of the queue
                 let slot = *self.fill.queue.at(i);
-                let scene = *self.smoke_scene.at(slot);
+                let scene = self.smoke_scene[slot as usize];
                 e.activate_scene(self, slot, scene);
                 e.active_insert(slot);
             }

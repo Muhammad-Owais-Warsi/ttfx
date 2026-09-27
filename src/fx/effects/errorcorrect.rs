@@ -117,6 +117,7 @@ impl Memo {
         if i >= self.by_sym.len() {
             self.by_sym.resize(i + 1, [Visual(NONE); 2]);
         }
+        // in bounds: resized above
         let entry = self.by_sym.at_mut(i as u32);
         if entry[0].0 == NONE {
             for (visual, color) in entry.iter_mut().zip([self.error, self.white]) {
@@ -181,8 +182,8 @@ impl Effect for ErrorCorrect {
                     None,
                 )
             };
-            *final_fg.at_mut(slot) = fg;
-            *final_bg.at_mut(slot) = bg;
+            final_fg[slot as usize] = fg;
+            final_bg[slot as usize] = bg;
             let scene = e.scene_new(slot, Name::NONE, false, None, None);
             let sym = e.input_sym(slot);
             e.add_frame(scene, sym, 1, Some(ColorPair::new(fg, bg)), 0)
@@ -274,7 +275,7 @@ impl Effect for ErrorCorrect {
                 if dynamic {
                     e.add_frames_visual(last_wipe, &memo.last_wipe[..6])
                         .map_err(other)?;
-                    let colors = ColorPair::new(*final_fg.at(slot), *final_bg.at(slot));
+                    let colors = ColorPair::new(final_fg[slot as usize], final_bg[slot as usize]);
                     let last = e.sym(BLOCK_WIPE_END[6]);
                     e.add_frame(last_wipe, last, 3, Some(colors), 0)
                         .map_err(other)?;
@@ -333,7 +334,7 @@ impl Effect for ErrorCorrect {
                             .map_err(other)?;
                     }
                 } else {
-                    let fg = final_fg.at(slot).expect("gradient mapping fg");
+                    let fg = final_fg[slot as usize].expect("gradient mapping fg");
                     let is_plain = plain(e, final_scene);
                     match memo.finals.get(&(sym, fg)) {
                         Some(frames) if is_plain => e.append_frames(final_scene, frames),

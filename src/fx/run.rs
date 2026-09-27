@@ -56,8 +56,12 @@ impl Engine {
     }
 }
 
+/// Render on a second thread, unless the run is paced, TTFX_THREADS is 0 or 1,
+/// or there is only one CPU.
 fn threaded(e: &Engine) -> bool {
-    !e.paced() && std::env::var_os("TTFX_THREADS").is_none_or(|v| v != "1") && cpus() >= 2
+    !e.paced()
+        && std::env::var_os("TTFX_THREADS").is_none_or(|v| v != "1" && v != "0")
+        && cpus() >= 2
 }
 
 /// The CPUs this thread may run on: its affinity mask on Linux (unlike

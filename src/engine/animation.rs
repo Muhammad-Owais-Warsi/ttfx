@@ -697,7 +697,7 @@ impl Animation {
             symbol.hash(&mut hasher);
             colors.hash(&mut hasher);
             hasher.write_u8(flags);
-            hasher.finish() as usize >> 52
+            (hasher.finish() >> 52) as usize
         };
         self.current_character_visual = APPEARANCE_MEMO.with(|memo| {
             let mut memo = memo.borrow_mut();

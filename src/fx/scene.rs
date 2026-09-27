@@ -659,6 +659,8 @@ impl Engine {
     /// Animation.activate_scene: resume semantics - the visual is the head of
     /// the remaining queue and playback is not reset.
     pub fn activate_scene(&mut self, hooks: &mut dyn Hooks, slot: u32, scene: SceneId) {
+        // the effect's slot, checked: doze_wake and show_visual index unchecked
+        assert!((slot as usize) < self.ch.len(), "activate_scene: no character {slot}");
         self.doze_wake(slot);
         let rec = &self.scenes.recs[scene as usize];
         assert!(!rec.is_drained(), "activate_scene: empty scene");
@@ -667,7 +669,7 @@ impl Engine {
             self.scenes.share(scene);
         }
         self.ch.scene[slot as usize] = scene;
-        self.set_visual(slot, visual);
+        self.show_visual(slot, visual);
         if self.observes(slot, Event::SceneActivated) {
             let name = self.scenes.cold[scene as usize].name;
             self.handle_event(hooks, slot, Event::SceneActivated, Caller::Scene(name));
@@ -710,6 +712,8 @@ impl Engine {
 
     /// Animation.step_animation plus _complete_scene_if_finished.
     pub fn step_animation(&mut self, hooks: &mut dyn Hooks, slot: u32) {
+        // the effect's slot, checked: the steps below index unchecked
+        assert!((slot as usize) < self.ch.len(), "step_animation: no character {slot}");
         self.doze_wake(slot);
         self.step_animation_awake(hooks, slot, false);
     }
@@ -749,12 +753,12 @@ impl Engine {
                 } else {
                     self.scenes.load_head(scene);
                 }
-                self.set_visual(slot, visual);
+                self.show_visual(slot, visual);
             } else {
                 rec.ticks = ticks;
                 if rec.is_looping() {
                     // SCENE_COMPLETE fires every tick for looping scenes
-                    self.set_visual(slot, visual);
+                    self.show_visual(slot, visual);
                     self.mark_candidate(slot);
                     if self.observes(slot, Event::SceneComplete) {
                         let name = self.scenes.cold[scene as usize].name;
@@ -774,7 +778,7 @@ impl Engine {
                         self.scenes.recs.at_mut(scene).ticks += k;
                     }
                 }
-                self.set_visual(slot, visual);
+                self.show_visual(slot, visual);
                 return;
             }
         } else if rec.flags & SCF_SYNC != 0 {
@@ -852,7 +856,7 @@ impl Engine {
                 visual
             }
         };
-        self.set_visual(slot, visual);
+        self.show_visual(slot, visual);
     }
 
     /// Whether step_animation_awake does nothing on this tick, given
@@ -908,7 +912,7 @@ impl Engine {
                 self.scenes.cold.at(scene).ease_total,
             )
         };
-        self.set_visual(slot, visual);
+        self.show_visual(slot, visual);
         let step = step + 1;
         let rec = self.scenes.recs.at_mut(scene);
         let looping = rec.is_looping();
@@ -979,7 +983,7 @@ impl Engine {
             },
         );
         self.doze_wake(slot);
-        self.set_visual(slot, visual);
+        self.show_visual(slot, visual);
     }
 
     /// The RESET_APPEARANCE action: the input symbol with no colors.

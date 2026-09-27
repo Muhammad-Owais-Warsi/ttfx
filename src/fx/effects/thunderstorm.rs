@@ -21,7 +21,7 @@ use crate::fx::particles::{ParticlePool, ParticleReset};
 use crate::fx::run::Effect;
 use crate::fx::scene::{Frame, SCF_PREEXISTING, SCF_PRE_BOLD};
 use crate::fx::visual::{VisualInfo, HAS_COLORS};
-use crate::fx::{At, Engine, FxBuild, Hooks, Name, Sym, NONE};
+use crate::fx::{Engine, FxBuild, Hooks, Name, Sym, NONE};
 use crate::utils::easing::Easing;
 use crate::utils::geometry::Coord;
 use crate::utils::graphics::{Color, ColorPair, Gradient};
@@ -277,7 +277,7 @@ impl Thunderstorm {
             register(e, n.fade, Action::Callback(CB_RETURN_STRIKE_TO_POOL, 0));
         }
         for &slot in &self.text {
-            e.scene_set_ease(*self.flash.at(slot), flash_ease);
+            e.scene_set_ease(self.flash[slot as usize], flash_ease);
         }
     }
 
@@ -331,7 +331,7 @@ impl Thunderstorm {
             .expect("strike-done registration failed");
             let strikes = std::mem::take(&mut self.active_strikes);
             for &strike_char in &strikes {
-                let scene = *self.flash.at(strike_char);
+                let scene = self.flash[strike_char as usize];
                 e.activate_scene(self, strike_char, scene);
                 e.active_insert(strike_char);
             }
@@ -375,7 +375,7 @@ impl Thunderstorm {
             SceneKind::Flash => std::mem::take(&mut self.flash),
         };
         for &slot in &text {
-            e.activate_scene(self, slot, *scenes.at(slot));
+            e.activate_scene(self, slot, scenes[slot as usize]);
             e.active_insert(slot);
         }
         match kind {

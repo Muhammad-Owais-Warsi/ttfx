@@ -69,8 +69,10 @@ impl Key {
         let [head, fg, bg] = self.0;
         VisualInfo {
             sym: Sym(head as u32),
-            fg: (head >> 48 & 1 != 0).then(|| Color::from_key(fg)),
-            bg: (head >> 49 & 1 != 0).then(|| Color::from_key(bg)),
+            // SAFETY: fg and bg are color_arg.key()s of Colors (Key::of) or
+            // Color::hex_key words (make_rgb), both valid from_key keys
+            fg: (head >> 48 & 1 != 0).then(|| unsafe { Color::from_key(fg) }),
+            bg: (head >> 49 & 1 != 0).then(|| unsafe { Color::from_key(bg) }),
             attrs: (head >> 32) as u16,
         }
     }

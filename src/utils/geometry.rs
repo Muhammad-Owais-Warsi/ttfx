@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use crate::utils::pycompat::round_half_even;
 
 /// 1-based canvas coordinate: column grows right, row grows UP (origin bottom-left).
+/// `repr(C)`: the fx motion batch loads a run of them as (column, row) pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(C)]
 pub struct Coord {
     pub column: i64,
     pub row: i64,

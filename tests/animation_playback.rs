@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use ttfx::engine::animation::{Animation, CharacterVisual, ExistingColorHandling, Scene, VisualParams};
 use ttfx::utils::ansi::ColorCode;
 use ttfx::utils::graphics::{Color, ColorPair, Gradient};
@@ -67,24 +65,25 @@ fn reset_restores_partially_played_frames_and_looping_order() {
 }
 
 #[test]
-fn appearance_changes_preserve_shared_visuals_and_weak_observers() {
+fn appearance_changes_leave_held_visuals_intact_and_reuse_pooled_ones() {
     let mut animation = Animation::new("original");
-    let original = Rc::clone(&animation.current_character_visual);
+    let original = animation.current_character_visual;
     animation.set_appearance("input", false, Some("λ"), None);
     assert_eq!(original.formatted_symbol.as_str(), "original");
     assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "λ");
 
-    let observer = Rc::downgrade(&animation.current_character_visual);
+    let lambda = animation.current_character_visual;
     animation.set_appearance("input", false, Some("replacement"), None);
-    assert!(observer.upgrade().is_none());
     assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "replacement");
+    animation.set_appearance("input", false, Some("λ"), None);
+    assert!(std::ptr::eq(animation.current_character_visual, lambda));
 }
 
 #[test]
 fn reused_appearances_reset_styles_and_follow_color_mode_changes() {
     let mut animation = Animation::new("input");
-    animation.current_character_visual = Rc::new(CharacterVisual::new(
-        "styled",
+    animation.current_character_visual = CharacterVisual::interned(
+        "styled".to_owned(),
         VisualParams {
             bold: true,
             dim: true,
@@ -96,7 +95,7 @@ fn reused_appearances_reset_styles_and_follow_color_mode_changes() {
             strike: true,
             ..Default::default()
         },
-    ));
+    );
     let colors = ColorPair::new(Some(Color::from_hex("Fa0088").unwrap()), Some(Color::from_hex("0A0B0C").unwrap()));
     animation.set_appearance("input", false, Some("字"), Some(colors));
     let expected = CharacterVisual::new(

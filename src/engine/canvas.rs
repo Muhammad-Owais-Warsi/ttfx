@@ -1,6 +1,7 @@
 //! Canvas, ported from engine/terminal.py Canvas.
 
-use crate::engine::character::{CharId, EffectCharacter};
+use crate::engine::character::CharId;
+use crate::engine::input::InputChar;
 use crate::utils::geometry::Coord;
 use crate::utils::pycompat::floor_div;
 use crate::utils::rng::Rng;
@@ -98,7 +99,7 @@ impl Canvas {
     /// in-canvas filter or this errors (upstream crashes on bare max()/min()).
     pub fn anchor_text(
         &mut self,
-        arena: &mut [EffectCharacter],
+        arena: &mut [InputChar],
         characters: Vec<CharId>,
         anchor: Anchor,
     ) -> Result<Vec<CharId>, String> {
@@ -133,9 +134,8 @@ impl Canvas {
 
         for &id in &characters {
             let ch = &mut arena[id.0 as usize];
-            let anchored = Coord::new(ch.input_coord.column + column_delta, ch.input_coord.row + row_delta);
-            ch.input_coord = anchored;
-            ch.motion.set_coordinate(anchored);
+            ch.input_coord = Coord::new(ch.input_coord.column + column_delta, ch.input_coord.row + row_delta);
+            ch.coord = ch.input_coord;
         }
 
         let kept: Vec<CharId> = characters

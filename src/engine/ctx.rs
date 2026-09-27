@@ -601,7 +601,7 @@ impl EngineCtx {
             None => {
                 // no active path: jump to final frame and force-complete
                 let last = *scene.frames.back().unwrap();
-                ch.animation.current_character_visual = scene.all_frames[last].character_visual.clone();
+                ch.animation.current_character_visual = scene.all_frames[last].character_visual;
                 scene.played_frames.append(&mut scene.frames);
             }
             Some((current_step, max_steps, total_distance, last_distance_reached)) => {
@@ -619,7 +619,7 @@ impl EngineCtx {
                     .min(final_frame_index)
                     .max(0);
                 let frame = scene.frames[frame_index as usize];
-                ch.animation.current_character_visual = scene.all_frames[frame].character_visual.clone();
+                ch.animation.current_character_visual = scene.all_frames[frame].character_visual;
             }
         }
     }
@@ -635,7 +635,7 @@ impl EngineCtx {
             .min(final_frame_index)
             .max(0);
         let frame = scene.frame_index_map[frame_index as usize];
-        ch.animation.current_character_visual = scene.all_frames[frame].character_visual.clone();
+        ch.animation.current_character_visual = scene.all_frames[frame].character_visual;
 
         scene.easing_current_step += 1;
         if scene.easing_current_step == scene.easing_total_steps {

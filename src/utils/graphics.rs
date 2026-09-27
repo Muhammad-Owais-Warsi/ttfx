@@ -11,10 +11,37 @@ use crate::utils::rng::Rng;
 /// The original constructor argument, preserved because upstream `Color.__eq__`
 /// and `__hash__` compare `color_arg` — `Color(255) != Color("ffffff")` even
 /// when they resolve to the same RGB. Dict/set keying depends on this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorArg {
     Xterm(u8),
     Hex(RgbString), // stored stripped of '#', case preserved (upstream strips '#' only)
+}
+
+impl ColorArg {
+    /// The argument as one word, equal exactly when the arguments are: an
+    /// xterm code with the top bit set, or the hex string's zero-padded bytes
+    /// and its length.
+    #[inline]
+    pub fn key(&self) -> u64 {
+        match self {
+            ColorArg::Xterm(code) => 1 << 63 | *code as u64,
+            ColorArg::Hex(rgb) => {
+                let mut word = [0; 8];
+                word[..7].copy_from_slice(&rgb.bytes);
+                word[7] = rgb.len;
+                u64::from_le_bytes(word)
+            }
+        }
+    }
+}
+
+/// One word per argument (see `key`); visual interning hashes colors on every
+/// frame an effect builds.
+impl std::hash::Hash for ColorArg {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.key());
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,8 +65,11 @@ impl RgbString {
 impl Deref for RgbString {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
-        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap()
+        // SAFETY: the bytes are a prefix copied whole from a &str (new) or
+        // ASCII hex digits (from_rgb), so they are valid UTF-8.
+        unsafe { std::str::from_utf8_unchecked(self.bytes.get_unchecked(..self.len as usize)) }
     }
 }
 
@@ -166,7 +196,7 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColorPair {
     pub fg_color: Option<Color>,
     pub bg_color: Option<Color>,

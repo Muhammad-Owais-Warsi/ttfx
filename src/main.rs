@@ -38,6 +38,7 @@ fn forget_engine<E, C>(effect: E, ctx: C) {
 }
 
 fn main() -> ExitCode {
+    ttfx::tune_allocator();
     ttfx::restore_sigpipe();
     let cli = cli::Cli::parse();
 
@@ -164,6 +165,36 @@ fn main() -> ExitCode {
         } else {
             ttfx::engine::ctx::Clock::real()
         };
+        if let Some(mut effect) = ttfx::fx::effects::build(effect_command) {
+            let mut engine = match ttfx::fx::Engine::new(&input_data, config.clone(), rng, clock) {
+                Ok(engine) => engine,
+                Err(engine::error::EngineError::UnsupportedAnsiSequence(seq)) => {
+                    ttfx::errln!("Error: Unsupported ANSI sequence in input data: {seq:?}");
+                    return ExitCode::from(1);
+                }
+                Err(e) => {
+                    ttfx::errln!("Error: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+            let outcome = if cli.parity_dump {
+                ttfx::fx::run::dump_effect(effect.as_mut(), &mut engine, cli.max_frames)
+                    .map(|_| ttfx::engine::effect::RunOutcome::Complete)
+            } else {
+                ttfx::fx::run::run_effect(effect.as_mut(), &mut engine, tty_output)
+            };
+            match outcome {
+                Ok(ttfx::engine::effect::RunOutcome::TerminalResized) => {
+                    config.reuse_canvas = false;
+                    rng = engine.rng;
+                    continue;
+                }
+                done => {
+                    forget_engine(effect, engine);
+                    break done.map(|_| ());
+                }
+            }
+        }
         let mut ctx = match ttfx::engine::ctx::EngineCtx::new(
             &input_data,
             config.clone(),

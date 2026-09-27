@@ -7,10 +7,12 @@
 
 use std::collections::HashMap;
 
-use crate::engine::animation::ExistingColorHandling;
-use crate::engine::character::{CharId, EffectCharacter};
+use crate::utils::hash::FxBuild;
+
+use crate::engine::character::CharId;
 use crate::engine::error::EngineError;
-use crate::engine::terminal::TerminalConfig;
+use crate::engine::terminal::{TerminalConfig, NONE};
+use crate::utils::geometry::Coord;
 use crate::utils::graphics::Color;
 
 /// Insertion-ordered Color -> count map (upstream: dict[Color, int]). Iteration
@@ -28,6 +30,54 @@ impl ColorFrequency {
     }
 }
 
+/// The input SGR sequences a character was parsed under (fg, bg): only the
+/// old engine keeps them, so they live in a side table (`Sequences`).
+pub type Sequences = Vec<(Option<String>, Option<String>)>;
+
+/// A character as parsed: what both engines build their own characters from.
+/// Index in the parse output is the arena slot (CharId). Plain data: the
+/// strings it was parsed under are in the side table.
+#[derive(Debug, Clone, Copy)]
+pub struct InputChar {
+    /// Python-compatible allocation id.
+    pub character_id: u32,
+    pub symbol: char,
+    pub input_coord: Coord,
+    /// Where the character starts (Motion.current_coord): its anchored input
+    /// coordinate, or the origin for one that was never anchored.
+    pub coord: Coord,
+    /// Its entry in the Sequences table, NONE for none.
+    pub sequences: u32,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+    pub bold: bool,
+    /// Parsed characters use their input colors; fill characters do not.
+    pub uses_preexisting_colors: bool,
+    pub is_fill: bool,
+}
+
+impl InputChar {
+    pub fn fill(character_id: u32, coord: Coord) -> Self {
+        InputChar {
+            character_id,
+            symbol: ' ',
+            input_coord: coord,
+            coord,
+            sequences: NONE,
+            fg: None,
+            bg: None,
+            bold: false,
+            uses_preexisting_colors: false,
+            is_fill: true,
+        }
+    }
+
+    /// A plain space: trailing ones are trimmed and they become fill.
+    pub fn is_blank(&self) -> bool {
+        self.symbol == ' ' && self.fg.is_none() && self.bg.is_none()
+    }
+}
+
 #[derive(Clone, Default)]
 struct ActiveState {
     fg_sequence: String, // "" = none, like upstream's active_sequences
@@ -38,8 +88,24 @@ struct ActiveState {
     standard_fg_parameter: Option<i64>,
 }
 
+/// Whether the input holds ESC or CR (both ASCII, so a byte scan finds
+/// them): 32 bytes at a time, which vectorizes.
+fn has_esc_or_cr(bytes: &[u8]) -> bool {
+    let mut chunks = bytes.chunks_exact(32);
+    let mut found = false;
+    for chunk in &mut chunks {
+        let mut hit = 0u8;
+        for &b in chunk {
+            hit |= (b == 0x1b) as u8 | (b == b'\r') as u8;
+        }
+        found |= hit != 0;
+    }
+    found || chunks.remainder().iter().any(|&b| b == 0x1b || b == b'\r')
+}
+
 pub struct Preprocessor<'a> {
-    pub arena: &'a mut Vec<EffectCharacter>,
+    pub arena: &'a mut Vec<InputChar>,
+    pub sequences: &'a mut Sequences,
     pub next_character_id: &'a mut u32,
     pub input_colors_frequency: &'a mut ColorFrequency,
     pub config: &'a TerminalConfig,
@@ -48,8 +114,11 @@ pub struct Preprocessor<'a> {
 impl<'a> Preprocessor<'a> {
     /// Returns rows of character ids (top row first, as parsed).
     pub fn preprocess(&mut self, input_data: &str) -> Result<Vec<Vec<CharId>>, EngineError> {
+        if !has_esc_or_cr(input_data.as_bytes()) {
+            return self.preprocess_plain(input_data);
+        }
         let chars: Vec<char> = input_data.chars().collect();
-        let mut screen: HashMap<(i64, i64), CharId> = HashMap::new();
+        let mut screen: HashMap<(i64, i64), CharId, FxBuild> = HashMap::default();
         let mut state = ActiveState::default();
         let (mut row, mut column) = (0i64, 0i64);
         let (mut max_row, mut max_column) = (0i64, 0i64);
@@ -94,7 +163,7 @@ impl<'a> Preprocessor<'a> {
                     (chars[i], 1)
                 };
                 for _ in 0..count {
-                    let id = self.build_character(&symbol.to_string(), &state)?;
+                    let id = self.build_character(symbol, &state)?;
                     screen.insert((row, column), id);
                     max_row = max_row.max(row);
                     max_column = max_column.max(column);
@@ -104,23 +173,56 @@ impl<'a> Preprocessor<'a> {
             }
         }
 
+        self.screen_lines(max_row, max_column, &state, |row, column| screen.get(&(row, column)).copied())
+    }
+
+    /// preprocess for input without ESC or CR: every cell is written once,
+    /// in row-major order, so each row's characters are its written ones in
+    /// column order (no screen map), and no SGR state ever applies.
+    fn preprocess_plain(&mut self, input_data: &str) -> Result<Vec<Vec<CharId>>, EngineError> {
+        let state = ActiveState::default();
+        let mut rows: Vec<Vec<CharId>> = vec![Vec::new()];
+        let tab_width = self.config.tab_width;
+        for c in input_data.chars() {
+            if c == '\n' {
+                rows.push(Vec::new());
+                continue;
+            }
+            let row = rows.last_mut().unwrap();
+            let (symbol, count) = if c == '\t' { (' ', tab_width - (row.len() as i64 % tab_width)) } else { (c, 1) };
+            for _ in 0..count {
+                let id = self.build_character(symbol, &state)?;
+                row.push(id);
+            }
+        }
+        let max_row = rows.len() as i64 - 1;
+        let max_column = rows.iter().map(|r| r.len() as i64 - 1).max().unwrap_or(0).max(0);
+        self.screen_lines(max_row, max_column, &state, |row, column| rows[row as usize].get(column as usize).copied())
+    }
+
+    /// The screen's rows (0..=max_row, columns 0..=max_column): a written
+    /// cell's character, else a fresh space; trailing plain spaces and empty
+    /// rows at the bottom trimmed. `state` is the end-of-input state.
+    fn screen_lines(
+        &mut self,
+        max_row: i64,
+        max_column: i64,
+        state: &ActiveState,
+        written: impl Fn(i64, i64) -> Option<CharId>,
+    ) -> Result<Vec<Vec<CharId>>, EngineError> {
         let empty_state = ActiveState::default();
         let mut characters: Vec<Vec<CharId>> = Vec::new();
         for screen_row in 0..=max_row {
-            let mut line: Vec<CharId> = Vec::new();
+            let mut line: Vec<CharId> = Vec::with_capacity(max_column as usize + 1);
             for screen_column in 0..=max_column {
-                let id = match screen.get(&(screen_row, screen_column)) {
-                    Some(&id) => id,
-                    None => self.build_character(" ", &empty_state)?,
+                let id = match written(screen_row, screen_column) {
+                    Some(id) => id,
+                    None => self.build_character(' ', &empty_state)?,
                 };
                 line.push(id);
             }
             while let Some(&last) = line.last() {
-                let ch = &self.arena[last.0 as usize];
-                if ch.input_symbol == " "
-                    && ch.animation.input_fg_color.is_none()
-                    && ch.animation.input_bg_color.is_none()
-                {
+                if self.arena[last.0 as usize].is_blank() {
                     line.pop();
                 } else {
                     break;
@@ -134,7 +236,7 @@ impl<'a> Preprocessor<'a> {
 
         if characters.is_empty() {
             // Faithful: the fallback character carries the END-of-input active state.
-            let id = self.build_character(" ", &state)?;
+            let id = self.build_character(' ', state)?;
             characters.push(vec![id]);
         }
         Ok(characters)
@@ -143,32 +245,39 @@ impl<'a> Preprocessor<'a> {
     /// build_character: allocates an id (even for characters later discarded),
     /// captures active colors, bumps the color frequency at CREATION time (even
     /// if a later cursor write overwrites the cell — see plan.md §5.13).
-    fn build_character(&mut self, symbol: &str, state: &ActiveState) -> Result<CharId, EngineError> {
-        let mut ch = EffectCharacter::new(*self.next_character_id, symbol, 0, 0);
+    fn build_character(&mut self, symbol: char, state: &ActiveState) -> Result<CharId, EngineError> {
+        let mut ch = InputChar {
+            character_id: *self.next_character_id,
+            symbol,
+            input_coord: Coord::new(0, 0),
+            coord: Coord::new(0, 0),
+            sequences: NONE,
+            fg: None,
+            bg: None,
+            bold: state.bold,
+            uses_preexisting_colors: true,
+            is_fill: false,
+        };
         *self.next_character_id += 1;
         // fg first, then bg — upstream dict iteration order over active_sequences
+        let (mut fg_sequence, mut bg_sequence) = (None, None);
         if !state.fg_sequence.is_empty() {
             if let Some(color) = &state.fg_color {
-                ch.input_ansi_fg_sequence = Some(state.fg_sequence.clone());
+                fg_sequence = Some(state.fg_sequence.clone());
                 self.input_colors_frequency.increment(color);
-                ch.animation.input_fg_color = Some(color.clone());
+                ch.fg = Some(*color);
             }
         }
         if !state.bg_sequence.is_empty() {
             if let Some(color) = &state.bg_color {
-                ch.input_ansi_bg_sequence = Some(state.bg_sequence.clone());
+                bg_sequence = Some(state.bg_sequence.clone());
                 self.input_colors_frequency.increment(color);
-                ch.animation.input_bg_color = Some(color.clone());
+                ch.bg = Some(*color);
             }
         }
-        ch.animation.input_bold = state.bold;
-        ch.animation.no_color = self.config.no_color;
-        ch.animation.use_xterm_colors = self.config.xterm_colors;
-        ch.animation.existing_color_handling = self.config.existing_color_handling;
-        ch.uses_input_preexisting_colors = true;
-        if ch.animation.existing_color_handling == ExistingColorHandling::Always {
-            let input_symbol = ch.input_symbol.clone();
-            ch.animation.set_appearance(&input_symbol, true, None, None);
+        if fg_sequence.is_some() || bg_sequence.is_some() {
+            ch.sequences = self.sequences.len() as u32;
+            self.sequences.push((fg_sequence, bg_sequence));
         }
         let id = CharId(self.arena.len() as u32);
         self.arena.push(ch);

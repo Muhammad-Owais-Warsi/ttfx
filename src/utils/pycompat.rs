@@ -4,7 +4,26 @@
 
 /// Python's built-in `round()`: banker's rounding (half-to-even), returning i64.
 /// Rust's `f64::round` is half-away-from-zero, which differs at exact .5 values.
+#[inline]
 pub fn round_half_even(x: f64) -> i64 {
+    // cvtsd2si rounds with MXCSR's default nearest-even mode (Rust never
+    // changes it), which is round_ties_even + the cast for every value it
+    // can represent; it returns i64::MIN on overflow and NaN, and that
+    // (rare) result takes the full routine below. Baseline x86_64 has no
+    // roundsd, so round_ties_even would be a libm call.
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is baseline on x86_64.
+        let r = unsafe { std::arch::x86_64::_mm_cvtsd_si64(std::arch::x86_64::_mm_set_sd(x)) };
+        if r != i64::MIN {
+            return r;
+        }
+    }
+    round_half_even_slow(x)
+}
+
+#[cold]
+fn round_half_even_slow(x: f64) -> i64 {
     if x.is_finite() {
         return x.round_ties_even() as i64;
     }

@@ -154,6 +154,24 @@ for anchor in n ne e se s sw w nw c; do
     check "anchor-text=$anchor" "$WORK/basic" --seed 4 --frame-rate 0 --anchor-text "$anchor" --canvas-width 30 --canvas-height 6 --ignore-terminal-dimensions "$EFFECT"
     COLUMNS=24 LINES=5 check "clipped=$anchor" "$WORK/tabs" --seed 5 --frame-rate 0 --anchor-canvas "$anchor" --anchor-text "$anchor" "$EFFECT"
 done
+# tiny, empty and negative terminals (LINES or COLUMNS from the environment):
+# the visible window shrinks to a row or a column, or to nothing, with the
+# canvas sized by the terminal or larger than it, from several anchors
+check_env() {
+    local -x "$1"
+    shift
+    check "$@"
+}
+for dim in LINES=-5 LINES=0 LINES=1 LINES=2 COLUMNS=-3 COLUMNS=0 COLUMNS=1 COLUMNS=2; do
+    check_env "$dim" "tiny/$dim" "$WORK/basic" --seed 19 --frame-rate 0 "$EFFECT"
+    check_env "$dim" "tiny/$dim/dump" "$WORK/tabs" --seed 19 --parity-dump "$EFFECT"
+    for anchor in sw ne c; do
+        check_env "$dim" "tiny/$dim/anchor-canvas=$anchor" "$WORK/basic" --seed 20 --frame-rate 0 --canvas-width 30 --canvas-height 10 --anchor-canvas "$anchor" "$EFFECT"
+    done
+    for anchor in n se w; do
+        check_env "$dim" "tiny/$dim/anchor-text=$anchor" "$WORK/tabs" --seed 21 --frame-rate 0 --canvas-width 30 --canvas-height 10 --anchor-canvas c --anchor-text "$anchor" "$EFFECT"
+    done
+done
 check small-canvas "$WORK/big" --seed 6 --frame-rate 0 --canvas-width 20 --canvas-height 4 "$EFFECT"
 check zero-canvas "$WORK/basic" --seed 6 --frame-rate 0 --canvas-width 0 --canvas-height 0 "$EFFECT"
 COLUMNS=10 LINES=3 check env-dims "$WORK/big" --seed 7 --frame-rate 0 "$EFFECT"

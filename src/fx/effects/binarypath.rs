@@ -162,6 +162,7 @@ impl BinaryPath {
         let mut index = segs.len() - 1;
         let mut found = false;
         for i in rep.cur as usize..segs.len() {
+            // in bounds: the loop's range
             let seg = segs.at(i);
             if distance_to_travel <= seg.distance {
                 index = i;
@@ -172,7 +173,8 @@ impl BinaryPath {
             rep.passed += seg.distance;
             rep.cur = i as u32 + 1;
         }
-        let seg = *segs.at(index);
+        // checked: len() - 1 wraps on a path without segments
+        let seg = segs[index];
         if !found {
             // for-else: overshoot re-adds the final segment's distance
             distance_to_travel += seg.distance;
@@ -192,7 +194,10 @@ impl BinaryPath {
         let mut kept = 0;
         for k in 0..self.moving.len() {
             let r = *self.moving.at(k);
-            let rep = *self.reps.at(r);
+            let rep = self.reps[r as usize];
+            // the representation's bit slots, checked once for the whole
+            // shift below (the hot loop: every bit of every moving rep)
+            assert!((rep.first + rep.emitted) as usize <= e.ch.len());
             for slot in (rep.first + 1..rep.first + rep.emitted).rev() {
                 let ahead = *e.ch.coord.at(slot - 1);
                 if *e.ch.coord.at(slot) != ahead {
@@ -205,7 +210,7 @@ impl BinaryPath {
             rep_mut.step += 1;
             if rep.step < ticks {
                 let coord = Self::position(&self.segs, rep_mut);
-                if *e.ch.coord.at(rep.first) != coord {
+                if e.ch.coord[rep.first as usize] != coord {
                     e.set_coordinate(rep.first, coord);
                 }
             }

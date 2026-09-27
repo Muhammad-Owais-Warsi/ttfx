@@ -543,12 +543,23 @@ impl Engine {
     /// the grid shows it at once; else a character with a cell logs it.
     #[inline(always)]
     pub fn set_visual(&mut self, slot: u32, visual: Visual) {
+        // the effect's slot, checked
+        assert!((slot as usize) < self.ch.len(), "set_visual: no character {slot}");
+        self.show_visual(slot, visual);
+    }
+
+    /// set_visual for a slot known to be a character's: the scene steps
+    /// take theirs from the active set or a table indexed checked before,
+    /// and every Chars column is len() long. The hot path of every effect.
+    #[inline(always)]
+    pub(super) fn show_visual(&mut self, slot: u32, visual: Visual) {
         let current = self.ch.visual.at_mut(slot);
         if *current == visual {
             return;
         }
         *current = visual;
         if let Some(r) = &mut self.render.back {
+            // show grows its tables to the slot
             r.show(slot, visual);
         } else if *self.ch.cell.at(slot) != NONE {
             self.render.push(slot | LOG_HANDLE, visual.0);
@@ -560,8 +571,9 @@ impl Engine {
     pub fn set_visuals(&mut self, slots: &[u32], visual_of: impl Fn(Sym) -> Visual) {
         let Some(r) = &mut self.render.back else {
             for &slot in slots {
-                let visual = visual_of(*self.ch.sym.at(slot));
-                self.set_visual(slot, visual);
+                // the effect's slot, checked here
+                let visual = visual_of(self.ch.sym[slot as usize]);
+                self.show_visual(slot, visual);
             }
             return;
         };
@@ -580,7 +592,9 @@ impl Engine {
         );
         let (dirty, row_dirty) = (&mut r.dirty[..], &mut r.row_dirty[..]);
         for &slot in slots {
-            let visual = visual_of(*sym.at(slot));
+            // the effect's slot, checked once; the renderer's slot tables were
+            // grown to ch.len() above and every Chars column is that long
+            let visual = visual_of(sym[slot as usize]);
             let current = current.at_mut(slot);
             if *current == visual {
                 continue;
@@ -611,6 +625,7 @@ impl Engine {
             }
         } else {
             *flags &= !CF_VISIBLE;
+            // in bounds: flags[slot] above was checked
             let cell = self.ch.cell.at_mut(slot);
             if *cell != NONE {
                 *cell = NONE;
@@ -637,6 +652,9 @@ impl Engine {
     /// The coordinate changed; a visible character changing cells logs it.
     #[inline(always)]
     pub fn coordinate_changed(&mut self, slot: u32) {
+        // is_visible checks the effect's slot, which bounds the unchecked
+        // reads below (every Chars column is len() long); this runs for every
+        // moving character on every step
         if !self.is_visible(slot) {
             return;
         }
@@ -654,7 +672,8 @@ impl Engine {
     }
 
     pub fn layer_changed(&mut self, slot: u32) {
-        if *self.ch.cell.at(slot) != NONE {
+        // the effect's slot, checked here; set_layer checked it already
+        if self.ch.cell[slot as usize] != NONE {
             let layer = *self.ch.layer.at(slot);
             self.render.push(slot | LOG_LAYER, layer as u32);
         }

@@ -136,18 +136,26 @@ impl std::hash::Hash for Color {
 }
 
 impl Color {
-    /// Construct a generated color without formatting and reparsing its channels.
-    /// The lowercase hex argument is observable in color equality and hashing.
-    pub(crate) fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
-        // the six digits worked out in one word, a nibble per byte (stored a
-        // byte at a time, they stalled the key's word load that follows)
-        let v = (red as u64) << 16 | (green as u64) << 8 | blue as u64;
+    /// `from_rgb(rgb >> 16, rgb >> 8, rgb).color_arg.key()` without making
+    /// the color: the six lowercase hex digits worked out in one word, a
+    /// nibble per byte, and the length 6 in the top byte.
+    #[inline]
+    pub(crate) fn hex_key(rgb: u32) -> u64 {
+        let v = rgb as u64 & 0xff_ffff;
         let mut nibbles = 0;
         for i in 0..6 {
             nibbles |= (v >> (20 - 4 * i) & 15) << (8 * i);
         }
         let letters = (nibbles + 0x0606_0606_0606) >> 4 & 0x0101_0101_0101;
-        let digits = (nibbles + 0x3030_3030_3030 + letters * 0x27).to_le_bytes();
+        (nibbles + 0x3030_3030_3030 + letters * 0x27) | 6 << 56
+    }
+
+    /// Construct a generated color without formatting and reparsing its channels.
+    /// The lowercase hex argument is observable in color equality and hashing.
+    pub(crate) fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
+        // the digits built in one word (stored a byte at a time, they stalled
+        // the key's word load that follows)
+        let digits = Self::hex_key((red as u32) << 16 | (green as u32) << 8 | blue as u32).to_le_bytes();
         let bytes = [digits[0], digits[1], digits[2], digits[3], digits[4], digits[5], 0];
         let rgb_color = RgbString { bytes, len: 6 };
         Color {
@@ -623,6 +631,7 @@ mod tests {
             let c = Color::from_rgb(r, g, b);
             assert_eq!(&*c.rgb_color, format!("{r:02x}{g:02x}{b:02x}"));
             assert_eq!(c.rgb_ints(), (r, g, b));
+            assert_eq!(c.color_arg.key(), Color::hex_key(v));
         }
     }
 }

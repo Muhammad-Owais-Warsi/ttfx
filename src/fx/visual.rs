@@ -90,9 +90,10 @@ impl Key {
 /// hash in the high half and the handle plus one in the low half (0: empty),
 /// so a probe reads the key only on a hash match and growing never reads
 /// keys.
-/// Kept at most half full, doubling from TABLE_INITIAL: its entries are
-/// written where the hashes fall, so a table sized for the run's end up
-/// front would be touched all over from the start.
+/// Kept at most half full, quadrupling from TABLE_INITIAL (as the asm's):
+/// its entries are written where the hashes fall, so a table sized for the
+/// run's end up front would be touched all over from the start, and each
+/// growth rehashes every entry, so it grows in few steps.
 struct Table {
     entries: Vec<u64>,
     count: usize,
@@ -134,7 +135,7 @@ impl Table {
 
     #[cold]
     fn grow(&mut self) {
-        let len = self.entries.len() * 2;
+        let len = self.entries.len() * 4;
         let old = std::mem::replace(&mut self.entries, vec![0; len]);
         let mask = self.entries.len() - 1;
         for e in old.into_iter().filter(|&e| e != 0) {
@@ -196,10 +197,33 @@ impl VisualPool {
     pub fn make(&mut self, symbols: &Symbols, info: VisualInfo) -> Visual {
         let key = Key::of(&info);
         let hash = key.hash();
-        let at = match self.table.find(&key, hash, &self.keys) {
-            Ok(visual) => return visual,
-            Err(at) => at,
-        };
+        match self.table.find(&key, hash, &self.keys) {
+            Ok(visual) => visual,
+            Err(at) => self.add(symbols, &info, key, hash, at),
+        }
+    }
+
+    /// `make` of `sym` in generated colors with no attributes but
+    /// HAS_COLORS, each color given as `1 << 24 | rgb` (Color::from_rgb's
+    /// channels) or 0 when absent. The key is built in registers: a
+    /// VisualInfo written to memory and read back as words stalled the loads.
+    #[inline]
+    pub fn make_rgb(&mut self, symbols: &Symbols, sym: Sym, fg: u32, bg: u32) -> Visual {
+        let word = |c: u32| if c != 0 { Color::hex_key(c) } else { 0 };
+        let present = ((fg != 0) as u64) << 48 | ((bg != 0) as u64) << 49;
+        let key = Key([sym.0 as u64 | (HAS_COLORS as u64) << 32 | present, word(fg), word(bg)]);
+        debug_assert_eq!(key, Key::of(&rgb_info(sym, fg, bg)));
+        let hash = key.hash();
+        match self.table.find(&key, hash, &self.keys) {
+            Ok(visual) => visual,
+            Err(at) => self.add(symbols, &rgb_info(sym, fg, bg), key, hash, at),
+        }
+    }
+
+    /// A new visual: `info`'s bytes formatted at the pool's end, its `key`
+    /// put in the table's empty entry `at`.
+    #[inline(never)]
+    fn add(&mut self, symbols: &Symbols, info: &VisualInfo, key: Key, hash: u32, at: usize) -> Visual {
         let (no_color, xterm_colors) = (self.no_color, self.xterm_colors);
         let offset = self.bytes.len() - COPY_BLOCK;
         // formatted in place, over the slack and room made past it (a
@@ -213,7 +237,7 @@ impl VisualPool {
         } else {
             self.bytes.resize(self.bytes.len() + most, 0);
         }
-        let len = format_visual(&mut self.bytes[offset..], symbol, &info, no_color, xterm_colors);
+        let len = format_visual(&mut self.bytes[offset..], symbol, info, no_color, xterm_colors);
         self.bytes.truncate(offset + len + COPY_BLOCK);
         self.max_len = self.max_len.max(len);
         let handle = Visual(self.keys.len() as u32);
@@ -266,6 +290,12 @@ impl VisualPool {
         let span = self.spans[visual.0 as usize];
         &self.bytes[span.offset as usize..(span.offset + span.len) as usize]
     }
+}
+
+/// make_rgb's fields as a VisualInfo.
+fn rgb_info(sym: Sym, fg: u32, bg: u32) -> VisualInfo {
+    let color = |c: u32| (c != 0).then(|| Color::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8));
+    VisualInfo { sym, fg: color(fg), bg: color(bg), attrs: HAS_COLORS }
 }
 
 /// Converts the old engine's CharacterVisual (input parsing can set

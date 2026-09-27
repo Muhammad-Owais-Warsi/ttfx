@@ -120,9 +120,9 @@ impl Hls {
         Hls { hue, saturation, lightness }
     }
 
-    /// The adjusted color as (present, rgb): see `unpack`.
+    /// The adjusted color as `1 << 24 | rgb` (VisualPool::make_rgb's form).
     #[inline]
-    fn adjust(&self, brightness: f64) -> u64 {
+    fn adjust(&self, brightness: f64) -> u32 {
         fn hue_to_rgb(lightness_scaled: f64, color_intensity: f64, mut hue_value: f64) -> f64 {
             if hue_value < 0.0 {
                 hue_value += 1.0;
@@ -157,7 +157,7 @@ impl Hls {
                 hue_to_rgb(lightness_scaled, color_intensity, self.hue - 1.0 / 3.0),
             )
         };
-        let channel = |v: f64| round_half_even(v * 255.0) as u8 as u64;
+        let channel = |v: f64| round_half_even(v * 255.0) as u8 as u32;
         1 << 24 | channel(red) << 16 | channel(green) << 8 | channel(blue)
     }
 }
@@ -226,8 +226,8 @@ struct Lit {
     row: i32,
 }
 
-/// A pair of generated colors (as adjust_color_brightness makes them) is
-/// packed as (present, rgb) for fg in the low 25 bits and bg above.
+/// A pair of adjusted colors (`Hls::adjust`'s form), fg in the low 25 bits
+/// and bg above, as colors (for checking).
 fn unpack(packed: u64) -> (Option<Color>, Option<Color>) {
     let one = |v: u64| (v & 1 << 24 != 0).then(|| Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8));
     (one(packed & 0x1ff_ffff), one(packed >> 25))
@@ -434,14 +434,13 @@ impl Spotlights {
             Err(at) => at,
         };
         let (fg, bg) = self.pairs.pairs[rec.pair as usize];
-        let packed = fg.map_or(0, |c| c.adjust(factor)) | bg.map_or(0, |c| c.adjust(factor)) << 25;
-        let (fg, bg) = unpack(packed);
-        debug_assert_eq!((fg, bg), {
+        let (fg, bg) = (fg.map_or(0, |c| c.adjust(factor)), bg.map_or(0, |c| c.adjust(factor)));
+        debug_assert_eq!(unpack(fg as u64 | (bg as u64) << 25), {
             let (fg, bg) = self.pairs.colors[rec.pair as usize];
             let adjust = |c: Color| Animation::adjust_color_brightness(&c, factor);
             (fg.map(adjust), bg.map(adjust))
         });
-        let visual = e.visuals.make(&e.symbols, VisualInfo { sym: rec.sym, fg, bg, attrs: HAS_COLORS });
+        let visual = e.visuals.make_rgb(&e.symbols, rec.sym, fg, bg);
         self.dimmed.insert(at, rec.bright.0, bits, visual.0);
         visual
     }

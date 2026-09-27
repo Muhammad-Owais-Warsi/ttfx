@@ -1,4 +1,3 @@
-pub mod asm;
 pub mod cli;
 pub mod effects;
 pub mod engine;

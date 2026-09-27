@@ -141,35 +141,11 @@ fn main() -> ExitCode {
         ttfx::install_sigwinch_handler();
     }
 
-    // The engines in the order they are offered the run: fx, the assembly
-    // engine, the old engine (the assembly engine first under TTFX_ASM=1).
-    // The assembly engine takes a run when it has the effect and this CPU runs
-    // one of its tiers; otherwise it declines untouched.
-    let asm_first = ttfx::asm::first();
-    let offer_asm = |config: &engine::terminal::TerminalConfig, rng: &mut ttfx::utils::rng::Rng| {
-        ttfx::asm::try_run(ttfx::asm::Run {
-            effect: effect_command,
-            input: &input_data,
-            config,
-            rng,
-            parity_dump: cli.parity_dump,
-            virtual_clock: cli.virtual_clock,
-            max_frames: cli.max_frames,
-            tty_output,
-        })
-    };
+    // The engines in the order they are offered the run: fx, then the
+    // original engine, which takes what fx declines (out-of-range duration
+    // options) and every run under TTFX_FX=0. The original engine is also the
+    // reference fx is checked against.
     let result = loop {
-        if asm_first {
-            match offer_asm(&config, &mut rng) {
-                Some(Ok(ttfx::engine::effect::RunOutcome::TerminalResized)) => {
-                    config.reuse_canvas = false;
-                    continue;
-                }
-                Some(done) => break done.map(|_| ()),
-                None => {}
-            }
-        }
-
         let clock = if cli.parity_dump || cli.virtual_clock {
             ttfx::engine::ctx::Clock::virtual_with_frame_rate(config.frame_rate)
         } else {
@@ -205,15 +181,11 @@ fn main() -> ExitCode {
                 }
             }
         }
-        if !asm_first {
-            match offer_asm(&config, &mut rng) {
-                Some(Ok(ttfx::engine::effect::RunOutcome::TerminalResized)) => {
-                    config.reuse_canvas = false;
-                    continue;
-                }
-                Some(done) => break done.map(|_| ()),
-                None => {}
-            }
+        // TTFX_FX=force: a run fx declines is an error, so comparisons can't
+        // quietly check the original engine against itself.
+        if std::env::var_os("TTFX_FX").is_some_and(|v| v == "force") {
+            ttfx::errln!("ttfx: TTFX_FX=force, but the fx engine declined this run");
+            return ExitCode::from(3);
         }
         let mut ctx =
             match ttfx::engine::ctx::EngineCtx::new(&input_data, config.clone(), rng, clock) {

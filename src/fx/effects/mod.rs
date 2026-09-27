@@ -44,8 +44,7 @@ use crate::effects::EffectCommand;
 use super::run::Effect;
 
 /// The fx-engine effect for this command, if there is one. `TTFX_FX=0`
-/// skips the fx engine (for comparisons): the assembly engine, then the old
-/// engine, take the run.
+/// skips the fx engine (for comparisons): the original engine takes the run.
 pub fn build(command: &EffectCommand) -> Option<Box<dyn Effect>> {
     if std::env::var_os("TTFX_FX").is_some_and(|v| v == "0") || !durations_fit(command) {
         return None;

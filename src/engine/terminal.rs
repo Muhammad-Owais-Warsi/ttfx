@@ -876,8 +876,7 @@ impl Terminal {
 }
 
 /// [`Terminal::resize_settled`] for a run described only by its settings,
-/// input line lengths and starting dimensions - what the assembly engine's
-/// runs are, as far as Rust can see them.
+/// input line lengths and starting dimensions.
 pub fn resize_settled(
     seen_at: &mut Option<Instant>,
     config: &TerminalConfig,

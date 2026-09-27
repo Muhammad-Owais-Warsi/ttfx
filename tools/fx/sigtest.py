@@ -18,7 +18,7 @@ def run(engine, args, send=None, after=0.0, cols=220, rows=60):
         os.dup2(r_in, 0)
         os.close(w_in)
         env = {k: v for k, v in os.environ.items() if k not in ("COLUMNS", "LINES")}
-        env["TTFX_ASM"] = engine
+        env["TTFX_FX"] = engine
         os.execve(BIN, [BIN] + args, env)
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     os.close(r_in)

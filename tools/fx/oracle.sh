@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# Byte-for-byte comparison of the assembly engine against the Rust engine in
-# the same binary (plan §9.2): TTFX_ASM=0 runs Rust, TTFX_ASM=force runs the
-# assembly engine and fails loudly if it declines. stdout, stderr and the exit
-# status must all match.
+# Byte-for-byte comparison of the fx engine against the original Rust engine
+# in the same binary: TTFX_FX=0 runs the original engine, the default runs fx
+# (which hands the original engine the few runs it declines: out-of-range
+# duration options). stdout, stderr and the exit status must all match.
 #
-# Usage: tools/asm/oracle.sh <effect> [quick|full]
+# Usage: tools/fx/oracle.sh <effect> [quick|full]
 #
-# Effect-specific option sets live in tools/asm/cases/<effect>.txt, one
+# Effect-specific option sets live in tools/fx/cases/<effect>.txt, one
 # argument list per line (blank lines and # comments ignored); each runs with
 # several seeds and inputs in addition to the effect's defaults. A line
 # "@global <args>" adds global arguments to every run (e.g. --virtual-clock
 # for effects that read the clock, whose real-clock output is not
 # reproducible). A line starting with "!" is an option set that is meant to
 # fail (a validation error); every other option set must run to completion in
-# the Rust engine on the basic input, so a typo or a shell-quoting mistake
-# can't quietly turn it into a comparison of two identical error messages.
+# the original engine on the basic input, so a typo or a shell-quoting
+# mistake can't quietly turn it into a comparison of two identical error
+# messages.
 #
-# TTFX_ASM_TIER=1|2|3|4 runs the assembly engine at that CPU tier (it only
-# reaches the asm runs; the Rust engine ignores it). tools/asm/oracle-tiers.sh
-# runs every effect at every tier.
+# fx's SIMD kernels are chosen at run time; TTFX_NO_AVX512=1 and
+# TTFX_NO_AVX2=1 in the environment reach the fx runs and check the narrower
+# kernels. tools/fx/oracle-simd.sh runs every effect with each.
 set -u
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
@@ -65,16 +66,6 @@ for f in "$WORK"/*; do
     fi
 done
 
-# A forced tier the binary cannot run would fail every case the same way.
-TIER_NOTE=""
-if [ -n "${TTFX_ASM_TIER:-}" ]; then
-    if ! TTFX_ASM=force "$BIN" --frame-rate 0 print < "$WORK/single" > /dev/null 2> "$WORK/tier.err"; then
-        echo "oracle: TTFX_ASM_TIER=$TTFX_ASM_TIER is not available: $(cat "$WORK/tier.err")" >&2
-        exit 2
-    fi
-    TIER_NOTE=" (tier $TTFX_ASM_TIER)"
-fi
-
 pass=0
 fail=0
 must_succeed=0
@@ -82,18 +73,18 @@ global=()
 check() {
     local name="$1"; shift
     local input="$1"; shift
-    TTFX_ASM=0 "$BIN" "${global[@]}" "$@" < "$input" > "$WORK/r.out" 2> "$WORK/r.err"; local rs=$?
-    TTFX_ASM=force "$BIN" "${global[@]}" "$@" < "$input" > "$WORK/a.out" 2> "$WORK/a.err"; local as=$?
+    TTFX_FX=0 "$BIN" "${global[@]}" "$@" < "$input" > "$WORK/r.out" 2> "$WORK/r.err"; local rs=$?
+    "$BIN" "${global[@]}" "$@" < "$input" > "$WORK/a.out" 2> "$WORK/a.err"; local as=$?
     if [ "$must_succeed" = 1 ] && [ $rs -ne 0 ]; then
         fail=$((fail + 1))
-        echo "FAIL $name: the Rust engine exited $rs, so this case tests nothing: $(head -c 200 "$WORK/r.err")"
+        echo "FAIL $name: the original engine exited $rs, so this case tests nothing: $(head -c 200 "$WORK/r.err")"
         return
     fi
     if [ $rs -eq $as ] && cmp -s "$WORK/r.out" "$WORK/a.out" && cmp -s "$WORK/r.err" "$WORK/a.err"; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        echo "FAIL $name: $* (exit rust=$rs asm=$as)"
+        echo "FAIL $name: $* (exit rust=$rs fx=$as)"
         cmp "$WORK/r.out" "$WORK/a.out" 2>&1 | head -1
         diff <(head -c 600 "$WORK/r.err") <(head -c 600 "$WORK/a.err") | head -6
     fi
@@ -112,13 +103,13 @@ set -f
 
 # the effect's own option sets
 options=("")
-if [ -f "$ROOT/tools/asm/cases/$EFFECT.txt" ]; then
+if [ -f "$ROOT/tools/fx/cases/$EFFECT.txt" ]; then
     while IFS= read -r line; do
         case "$line" in ''|'#'*) continue ;; '@global '*) read -ra global <<< "${line#@global }"; continue ;; esac
         expect_error=0
         case "$line" in '!'*) expect_error=1; line="${line#!}"; line="${line# }" ;; esac
         # shellcheck disable=SC2086
-        TTFX_ASM=0 "$BIN" "${global[@]}" --seed 1 --frame-rate 0 "$EFFECT" $line < "$WORK/basic" > /dev/null 2> "$WORK/v.err"
+        TTFX_FX=0 "$BIN" "${global[@]}" --seed 1 --frame-rate 0 "$EFFECT" $line < "$WORK/basic" > /dev/null 2> "$WORK/v.err"
         vs=$?
         if [ $expect_error -eq 0 ] && [ $vs -ne 0 ]; then
             fail=$((fail + 1))
@@ -128,7 +119,7 @@ if [ -f "$ROOT/tools/asm/cases/$EFFECT.txt" ]; then
             echo "FAIL [$line]: marked as an expected error, but the Rust engine accepts it"
         fi
         options+=("$line")
-    done < "$ROOT/tools/asm/cases/$EFFECT.txt"
+    done < "$ROOT/tools/fx/cases/$EFFECT.txt"
 fi
 
 for opts in "${options[@]}"; do
@@ -184,5 +175,5 @@ check wrap-canvas "$WORK/ragged" --seed 17 --frame-rate 0 --wrap-text --canvas-w
 check wrap-ignore "$WORK/tabs" --seed 18 --frame-rate 0 --wrap-text --canvas-width 4 --ignore-terminal-dimensions "$EFFECT"
 check paced "$WORK/single" --seed 14 --frame-rate 2000 "$EFFECT"
 
-echo "oracle $EFFECT$TIER_NOTE: $pass passed, $fail failed"
+echo "oracle $EFFECT: $pass passed, $fail failed"
 [ $fail -eq 0 ]

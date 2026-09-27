@@ -11,7 +11,7 @@ ARGS = [BIN, "--seed", "1", "--frame-rate", "0", "--canvas-width", "200", "--can
 
 
 def pipe_run(engine, keep):
-    env = dict(os.environ, TTFX_ASM=engine)
+    env = dict(os.environ, TTFX_FX=engine)
     p = subprocess.Popen(ARGS, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     p.stdin.write(INPUT)
     p.stdin.close()
@@ -27,7 +27,7 @@ def pty_run(engine, keep):
     if pid == 0:
         os.dup2(r_in, 0)
         os.close(w_in)
-        env = dict(os.environ, TTFX_ASM=engine)
+        env = dict(os.environ, TTFX_FX=engine)
         os.execve(BIN, ARGS, env)
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 220, 0, 0))
     os.close(r_in)

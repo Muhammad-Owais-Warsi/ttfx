@@ -90,7 +90,7 @@ impl Key {
 /// hash in the high half and the handle plus one in the low half (0: empty),
 /// so a probe reads the key only on a hash match and growing never reads
 /// keys.
-/// Kept at most half full, quadrupling from TABLE_INITIAL (as the asm's):
+/// Kept at most half full, quadrupling from TABLE_INITIAL:
 /// its entries are written where the hashes fall, so a table sized for the
 /// run's end up front would be touched all over from the start, and each
 /// growth rehashes every entry, so it grows in few steps.

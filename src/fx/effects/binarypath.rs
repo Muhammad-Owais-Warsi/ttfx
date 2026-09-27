@@ -26,9 +26,9 @@ use crate::fx::scene::{Frame, SCF_PREEXISTING, SCF_PRE_BOLD};
 use crate::fx::visual::{VisualInfo, HAS_COLORS};
 use crate::fx::{At, Engine, FxBuild, Hooks, Name, Sym};
 use crate::utils::easing::Easing;
-use crate::utils::pycompat::round_half_even;
 use crate::utils::geometry::{self, Coord};
 use crate::utils::graphics::{Color, ColorPair, Gradient};
+use crate::utils::pycompat::round_half_even;
 
 /// _BinaryRepresentation: the source character, its bits (slots `first..
 /// first + count`) and how many of them are on their way.
@@ -124,11 +124,17 @@ fn make_coords(e: &mut Engine, input: Coord, coords: &mut Vec<Coord>) {
         let column_distance = (last.column - input.column).abs();
         if row_next && row_distance > 0 {
             let step = e.rng.randint(1, row_distance.min(row_limit));
-            next = Coord::new(last.column, last.row + step * (input.row - last.row).signum());
+            next = Coord::new(
+                last.column,
+                last.row + step * (input.row - last.row).signum(),
+            );
             row_next = false;
         } else if !row_next && column_distance > 0 {
             let step = e.rng.randint(1, column_distance.min(4));
-            next = Coord::new(last.column + step * (input.column - last.column).signum(), last.row);
+            next = Coord::new(
+                last.column + step * (input.column - last.column).signum(),
+                last.row,
+            );
             row_next = true;
         } else {
             next = input;
@@ -151,7 +157,8 @@ impl BinaryPath {
         if rep.max_steps == 0 {
             return segs[segs.len() - 1].end;
         }
-        let mut distance_to_travel = rep.step as f64 / rep.max_steps as f64 * rep.total - rep.passed;
+        let mut distance_to_travel =
+            rep.step as f64 / rep.max_steps as f64 * rep.total - rep.passed;
         let mut index = segs.len() - 1;
         let mut found = false;
         for i in rep.cur as usize..segs.len() {
@@ -170,7 +177,11 @@ impl BinaryPath {
             // for-else: overshoot re-adds the final segment's distance
             distance_to_travel += seg.distance;
         }
-        let t = if seg.distance == 0.0 { 0.0 } else { (distance_to_travel / seg.distance).min(1.0) };
+        let t = if seg.distance == 0.0 {
+            0.0
+        } else {
+            (distance_to_travel / seg.distance).min(1.0)
+        };
         geometry::find_coord_on_line(seg.start, seg.end, t)
     }
 
@@ -212,10 +223,17 @@ impl Effect for BinaryPath {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         // __init__: final_wipe_chars computed before build()
-        self.wipe_groups =
-            e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalTopRightToBottomLeft);
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        self.wipe_groups = e.get_characters_grouped(
+            CharacterFilter::default(),
+            CharacterGroup::DiagonalTopRightToBottomLeft,
+        );
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -227,7 +245,10 @@ impl Effect for BinaryPath {
             )
             .map_err(other)?;
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
 
         // the bits: format(ord(symbol), "08b")
         let digits = [e.sym("0"), e.sym("1")];
@@ -238,7 +259,8 @@ impl Effect for BinaryPath {
             let count = 32 - (code_point | 0x80).leading_zeros();
             let mut first = 0;
             for bit in (0..count).rev() {
-                let added = e.add_character_sym(digits[(code_point >> bit & 1) as usize], Coord::new(0, 0));
+                let added =
+                    e.add_character_sym(digits[(code_point >> bit & 1) as usize], Coord::new(0, 0));
                 if bit == count - 1 {
                     first = added;
                 }
@@ -264,7 +286,12 @@ impl Effect for BinaryPath {
         let mut bit_visuals = Vec::with_capacity(colors.len() * 2);
         for &sym in &digits {
             for &color in colors {
-                let info = VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS };
+                let info = VisualInfo {
+                    sym,
+                    fg: Some(color),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                };
                 bit_visuals.push(e.visuals.make(&e.symbols, info));
             }
         }
@@ -275,13 +302,24 @@ impl Effect for BinaryPath {
             // activation's origin segment (the bits start on the first
             // waypoint), then Path.new_waypoint's segments and running total
             let seg = self.segs.len() as u32;
-            self.segs.push(Seg { start: coords[0], end: coords[0], distance: 0.0 });
+            self.segs.push(Seg {
+                start: coords[0],
+                end: coords[0],
+                distance: 0.0,
+            });
             let mut total = 0.0;
             for pair in coords.windows(2) {
                 let distance = geometry::find_length_of_line(pair[0], pair[1], true);
-                debug_assert!(distance.fract() == 0.0, "binarypath: segment off a row or column");
+                debug_assert!(
+                    distance.fract() == 0.0,
+                    "binarypath: segment off a row or column"
+                );
                 total += distance;
-                self.segs.push(Seg { start: pair[0], end: pair[1], distance });
+                self.segs.push(Seg {
+                    start: pair[0],
+                    end: pair[1],
+                    distance,
+                });
             }
             let rep = &mut self.reps[r];
             rep.seg = seg;
@@ -301,7 +339,9 @@ impl Effect for BinaryPath {
         self.brighten = e.name("brighten_scn");
         let white = Color::from_hex("ffffff").unwrap();
         let spectrum = |a: Color, b: Color, steps: i64| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[a, b], steps, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[a, b], steps, false)
+                .map_err(other)?
+                .spectrum)
         };
         let dim = |c: Color| Animation::adjust_color_brightness(&c, 0.5);
         // final color -> its index; (symbol, final color) -> the collapse and
@@ -314,7 +354,10 @@ impl Effect for BinaryPath {
             let (final_fg, final_bg) = if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
             if !dynamic {
                 let final_fg = final_fg.unwrap();
@@ -330,11 +373,28 @@ impl Effect for BinaryPath {
                     }
                 }
                 let dim_fg = dim(final_fg);
-                e.apply_gradient(collapse, &[sym], 3, Some(&spectrum(white, dim_fg, 7)?), None).map_err(other)?;
+                e.apply_gradient(
+                    collapse,
+                    &[sym],
+                    3,
+                    Some(&spectrum(white, dim_fg, 7)?),
+                    None,
+                )
+                .map_err(other)?;
                 let brighten = e.scene_new(slot, self.brighten, false, None, None);
-                e.apply_gradient(brighten, &[sym], 2, Some(&spectrum(dim_fg, final_fg, 10)?), None).map_err(other)?;
+                e.apply_gradient(
+                    brighten,
+                    &[sym],
+                    2,
+                    Some(&spectrum(dim_fg, final_fg, 10)?),
+                    None,
+                )
+                .map_err(other)?;
                 if plain {
-                    let frames = (e.scenes.frames_of(collapse).to_vec(), e.scenes.frames_of(brighten).to_vec());
+                    let frames = (
+                        e.scenes.frames_of(collapse).to_vec(),
+                        e.scenes.frames_of(brighten).to_vec(),
+                    );
                     memo.insert((sym, index), frames);
                 }
                 continue;
@@ -343,22 +403,43 @@ impl Effect for BinaryPath {
             let collapse_fg = dim_fg.map(|c| spectrum(white, c, 7)).transpose()?;
             let collapse_bg = dim_bg.map(|c| spectrum(white, c, 7)).transpose()?;
             if collapse_fg.is_some() || collapse_bg.is_some() {
-                e.apply_gradient(collapse, &[sym], 3, collapse_fg.as_deref(), collapse_bg.as_deref())
-                    .map_err(other)?;
+                e.apply_gradient(
+                    collapse,
+                    &[sym],
+                    3,
+                    collapse_fg.as_deref(),
+                    collapse_bg.as_deref(),
+                )
+                .map_err(other)?;
             } else {
-                e.add_frame(collapse, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                e.add_frame(collapse, sym, 3, Some(ColorPair::default()), 0)
+                    .map_err(other)?;
             }
             let brighten = e.scene_new(slot, self.brighten, false, None, None);
-            let brighten_fg = dim_fg.zip(final_fg).map(|(d, f)| spectrum(d, f, 10)).transpose()?;
-            let brighten_bg = dim_bg.zip(final_bg).map(|(d, f)| spectrum(d, f, 10)).transpose()?;
+            let brighten_fg = dim_fg
+                .zip(final_fg)
+                .map(|(d, f)| spectrum(d, f, 10))
+                .transpose()?;
+            let brighten_bg = dim_bg
+                .zip(final_bg)
+                .map(|(d, f)| spectrum(d, f, 10))
+                .transpose()?;
             if brighten_fg.is_some() || brighten_bg.is_some() {
-                e.apply_gradient(brighten, &[sym], 2, brighten_fg.as_deref(), brighten_bg.as_deref())
-                    .map_err(other)?;
+                e.apply_gradient(
+                    brighten,
+                    &[sym],
+                    2,
+                    brighten_fg.as_deref(),
+                    brighten_bg.as_deref(),
+                )
+                .map_err(other)?;
             } else {
-                e.add_frame(brighten, sym, 2, Some(ColorPair::default()), 0).map_err(other)?;
+                e.add_frame(brighten, sym, 2, Some(ColorPair::default()), 0)
+                    .map_err(other)?;
             }
         }
-        self.max_active = 1.max((config.active_binary_groups * self.reps.len() as f64) as i64) as usize;
+        self.max_active =
+            1.max((config.active_binary_groups * self.reps.len() as f64) as i64) as usize;
         self.pending = (0..self.reps.len() as u32).collect();
         self.active = Vec::with_capacity(self.max_active.min(self.reps.len()));
         self.moving = Vec::with_capacity(self.reps.len());
@@ -388,7 +469,9 @@ impl Effect for BinaryPath {
                     let slot = rep.first + rep.emitted;
                     rep.emitted += 1;
                     e.set_visible(slot, true);
-                } else if (rep.first..rep.first + rep.count).all(|s| *e.ch.coord.at(s) == rep.input_coord) {
+                } else if (rep.first..rep.first + rep.count)
+                    .all(|s| *e.ch.coord.at(s) == rep.input_coord)
+                {
                     let rep = *rep;
                     for slot in rep.first..rep.first + rep.count {
                         e.set_visible(slot, false);

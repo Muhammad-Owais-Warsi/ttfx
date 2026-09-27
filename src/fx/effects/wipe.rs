@@ -31,7 +31,12 @@ pub struct Wipe {
 impl Wipe {
     pub fn new(config: WipeConfig) -> Self {
         let wipe_delay = config.wipe_delay;
-        Wipe { config, easer: None, scene: Vec::new(), wipe_delay }
+        Wipe {
+            config,
+            easer: None,
+            scene: Vec::new(),
+            wipe_delay,
+        }
     }
 }
 
@@ -47,8 +52,13 @@ impl Effect for Wipe {
         let groups = e.get_characters_grouped(CharacterFilter::default(), config.wipe_direction);
         self.easer = Some(SequenceEaser::new(groups, config.wipe_ease, 100));
 
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -77,7 +87,10 @@ impl Effect for Wipe {
             HashMap::with_capacity_and_hasher(e.char_count().min(1 << 14), FxBuild::default());
         let mut memo_frames: Vec<Frame> = Vec::new();
         let mut scene_frames: Vec<Frame> = Vec::new();
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             let sym = e.input_sym(slot);
             let scene = e.scene_new(slot, wipe, false, None, None);
@@ -85,38 +98,70 @@ impl Effect for Wipe {
             if dynamic {
                 let colors = ColorPair::new(e.input_fg(slot), e.input_bg(slot));
                 if fast {
-                    let info = VisualInfo { sym, fg: colors.fg_color, bg: colors.bg_color, attrs: HAS_COLORS };
+                    let info = VisualInfo {
+                        sym,
+                        fg: colors.fg_color,
+                        bg: colors.bg_color,
+                        attrs: HAS_COLORS,
+                    };
                     let visual = e.visuals.make(&e.symbols, info);
                     scene_frames.clear();
-                    scene_frames.resize(dynamic_frames.max(0) as usize, Frame { visual, duration: frames as u32 });
+                    scene_frames.resize(
+                        dynamic_frames.max(0) as usize,
+                        Frame {
+                            visual,
+                            duration: frames as u32,
+                        },
+                    );
                     e.add_frames_visual(scene, &scene_frames).map_err(other)?;
                 } else {
                     for _ in 0..dynamic_frames {
-                        e.add_frame(scene, sym, frames, Some(colors), 0).map_err(other)?;
+                        e.add_frame(scene, sym, frames, Some(colors), 0)
+                            .map_err(other)?;
                     }
                 }
                 continue;
             }
-            let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping fg");
+            let final_fg = *final_gradient_mapping
+                .get(&e.input_coord(slot))
+                .expect("gradient mapping fg");
             if last_final.as_ref().is_none_or(|(c, _)| *c != final_fg) {
-                let spectrum =
-                    Gradient::new(&[first, final_fg], &config.final_gradient_steps, false, false).map_err(other)?.spectrum;
+                let spectrum = Gradient::new(
+                    &[first, final_fg],
+                    &config.final_gradient_steps,
+                    false,
+                    false,
+                )
+                .map_err(other)?
+                .spectrum;
                 last_final = Some((final_fg, spectrum));
             }
             let spectrum = &last_final.as_ref().unwrap().1;
             if !fast {
-                e.apply_gradient(scene, &[sym], frames, Some(spectrum), None).map_err(other)?;
+                e.apply_gradient(scene, &[sym], frames, Some(spectrum), None)
+                    .map_err(other)?;
                 continue;
             }
-            let (start, end) = *memo.entry([sym.0 as u64, color_key(Some(final_fg))]).or_insert_with(|| {
-                let start = memo_frames.len() as u32;
-                for &c in spectrum {
-                    let info = VisualInfo { sym, fg: Some(c), bg: None, attrs: HAS_COLORS };
-                    memo_frames.push(Frame { visual: e.visuals.make(&e.symbols, info), duration: frames as u32 });
-                }
-                (start, memo_frames.len() as u32)
-            });
-            e.add_frames_visual(scene, &memo_frames[start as usize..end as usize]).map_err(other)?;
+            let (start, end) = *memo
+                .entry([sym.0 as u64, color_key(Some(final_fg))])
+                .or_insert_with(|| {
+                    let start = memo_frames.len() as u32;
+                    for &c in spectrum {
+                        let info = VisualInfo {
+                            sym,
+                            fg: Some(c),
+                            bg: None,
+                            attrs: HAS_COLORS,
+                        };
+                        memo_frames.push(Frame {
+                            visual: e.visuals.make(&e.symbols, info),
+                            duration: frames as u32,
+                        });
+                    }
+                    (start, memo_frames.len() as u32)
+                });
+            e.add_frames_visual(scene, &memo_frames[start as usize..end as usize])
+                .map_err(other)?;
         }
         Ok(())
     }

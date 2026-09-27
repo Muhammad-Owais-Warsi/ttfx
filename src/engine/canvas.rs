@@ -134,7 +134,10 @@ impl Canvas {
 
         for &id in &characters {
             let ch = &mut arena[id.0 as usize];
-            ch.input_coord = Coord::new(ch.input_coord.column + column_delta, ch.input_coord.row + row_delta);
+            ch.input_coord = Coord::new(
+                ch.input_coord.column + column_delta,
+                ch.input_coord.row + row_delta,
+            );
             ch.coord = ch.input_coord;
         }
 
@@ -148,10 +151,26 @@ impl Canvas {
             return Err("all input characters fall outside the canvas after anchoring".to_string());
         }
 
-        self.text_left = kept.iter().map(|&id| arena[id.0 as usize].input_coord.column).min().unwrap();
-        self.text_right = kept.iter().map(|&id| arena[id.0 as usize].input_coord.column).max().unwrap();
-        self.text_top = kept.iter().map(|&id| arena[id.0 as usize].input_coord.row).max().unwrap();
-        self.text_bottom = kept.iter().map(|&id| arena[id.0 as usize].input_coord.row).min().unwrap();
+        self.text_left = kept
+            .iter()
+            .map(|&id| arena[id.0 as usize].input_coord.column)
+            .min()
+            .unwrap();
+        self.text_right = kept
+            .iter()
+            .map(|&id| arena[id.0 as usize].input_coord.column)
+            .max()
+            .unwrap();
+        self.text_top = kept
+            .iter()
+            .map(|&id| arena[id.0 as usize].input_coord.row)
+            .max()
+            .unwrap();
+        self.text_bottom = kept
+            .iter()
+            .map(|&id| arena[id.0 as usize].input_coord.row)
+            .min()
+            .unwrap();
         self.text_width = std::cmp::max(self.text_right - self.text_left + 1, 1);
         self.text_height = std::cmp::max(self.text_top - self.text_bottom + 1, 1);
         self.text_center_row = self.text_bottom + floor_div(self.text_top - self.text_bottom, 2);
@@ -161,7 +180,10 @@ impl Canvas {
     }
 
     pub fn coord_is_in_canvas(&self, coord: Coord) -> bool {
-        self.left <= coord.column && coord.column <= self.right && self.bottom <= coord.row && coord.row <= self.top
+        self.left <= coord.column
+            && coord.column <= self.right
+            && self.bottom <= coord.row
+            && coord.row <= self.top
     }
 
     pub fn coord_is_in_text(&self, coord: Coord) -> bool {
@@ -190,7 +212,12 @@ impl Canvas {
     /// random_coord: outside_scope picks among four coords exactly one cell past
     /// an edge — note the RNG call ORDER (above, below, left, right built first,
     /// then choice) is part of the parity contract.
-    pub fn random_coord(&self, rng: &mut Rng, outside_scope: bool, within_text_boundary: bool) -> Coord {
+    pub fn random_coord(
+        &self,
+        rng: &mut Rng,
+        outside_scope: bool,
+        within_text_boundary: bool,
+    ) -> Coord {
         if outside_scope {
             let above = Coord::new(self.random_column(rng, false), self.top + 1);
             let below = Coord::new(self.random_column(rng, false), self.bottom - 1);

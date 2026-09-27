@@ -32,7 +32,11 @@ pub struct Spray {
 
 impl Spray {
     pub fn new(config: SprayConfig) -> Self {
-        Spray { config, pending: Vec::new(), volume: 1 }
+        Spray {
+            config,
+            pending: Vec::new(),
+            volume: 1,
+        }
     }
 }
 
@@ -46,8 +50,13 @@ impl Effect for Spray {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -81,7 +90,10 @@ impl Effect for Spray {
         let mut frames: Vec<Frame> = Vec::with_capacity(8);
 
         // TopToBottomLeftToRight draws nothing
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         e.scenes.reserve(characters.len(), characters.len() * 8);
         self.pending.reserve(characters.len());
         for &slot in &characters {
@@ -90,28 +102,61 @@ impl Effect for Spray {
             let speed = e.rng.uniform(speed_min, speed_max);
             e.set_coordinate(slot, origin);
             let path = e
-                .path_new(slot, speed, Some(config.movement_easing), None, 0, false, Name::NONE)
+                .path_new(
+                    slot,
+                    speed,
+                    Some(config.movement_easing),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, input, None, Name::NONE)
+                .map_err(other)?;
             let path_name = e.paths.recs[path as usize].name;
-            e.register_event(slot, Event::PathActivated, Caller::Path(path_name), Action::SetLayer(1))
-                .map_err(other)?;
-            e.register_event(slot, Event::PathComplete, Caller::Path(path_name), Action::SetLayer(0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathActivated,
+                Caller::Path(path_name),
+                Action::SetLayer(1),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(path_name),
+                Action::SetLayer(0),
+            )
+            .map_err(other)?;
 
             let scene = e.scene_new(slot, Name::NONE, false, None, None);
             frames.clear();
             if dynamic {
-                let info = VisualInfo { sym, fg: e.input_fg(slot), bg: e.input_bg(slot), attrs: HAS_COLORS };
+                let info = VisualInfo {
+                    sym,
+                    fg: e.input_fg(slot),
+                    bg: e.input_bg(slot),
+                    attrs: HAS_COLORS,
+                };
                 let visual = e.visuals.make(&e.symbols, info);
-                frames.resize(7, Frame { visual, duration: 20 });
+                frames.resize(
+                    7,
+                    Frame {
+                        visual,
+                        duration: 20,
+                    },
+                );
             } else {
                 let start = e.rng.choice_index(spectrum.len());
-                let final_fg = *final_gradient_mapping.get(&input).expect("gradient mapping fg");
+                let final_fg = *final_gradient_mapping
+                    .get(&input)
+                    .expect("gradient mapping fg");
                 let ids = match droplets.get(&(start, final_fg)) {
                     Some(ids) => ids,
                     None => {
-                        let gradient = Gradient::with_steps(&[spectrum[start], final_fg], 7, false).map_err(other)?;
+                        let gradient = Gradient::with_steps(&[spectrum[start], final_fg], 7, false)
+                            .map_err(other)?;
                         let ids = gradient
                             .spectrum
                             .iter()
@@ -133,7 +178,9 @@ impl Effect for Spray {
                     // apply_gradient_to_symbols' check
                     let symbol = e.symbol(sym);
                     if symbol.chars().nth(1).is_some() {
-                        return Err(other(format!("Symbol must be a string with a length of 1. Received: `{symbol}`.")));
+                        return Err(other(format!(
+                            "Symbol must be a string with a length of 1. Received: `{symbol}`."
+                        )));
                     }
                 }
                 if table.len() < colors.len() {
@@ -142,10 +189,18 @@ impl Effect for Spray {
                 for &id in ids {
                     let visual = table.at_mut(id);
                     if visual.0 == NONE {
-                        let info = VisualInfo { sym, fg: Some(*colors.at(id)), bg: None, attrs: HAS_COLORS };
+                        let info = VisualInfo {
+                            sym,
+                            fg: Some(*colors.at(id)),
+                            bg: None,
+                            attrs: HAS_COLORS,
+                        };
                         *visual = e.visuals.make(&e.symbols, info);
                     }
-                    frames.push(Frame { visual: *visual, duration: 20 });
+                    frames.push(Frame {
+                        visual: *visual,
+                        duration: 20,
+                    });
                 }
             }
             e.add_frames_visual(scene, &frames).map_err(other)?;

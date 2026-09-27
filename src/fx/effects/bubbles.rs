@@ -26,7 +26,9 @@ use crate::utils::geometry::Coord;
 use crate::utils::graphics::{Color, ColorPair, Gradient};
 use crate::utils::pycompat::round_half_even;
 
-const RAINBOW_STOPS: [&str; 7] = ["e81416", "ffa500", "faeb36", "79c314", "487de7", "4b369d", "70369d"];
+const RAINBOW_STOPS: [&str; 7] = [
+    "e81416", "ffa500", "faeb36", "79c314", "487de7", "4b369d", "70369d",
+];
 const POP_SPEED: f64 = 0.3;
 const POP_CHANCE: f64 = 0.002;
 
@@ -91,7 +93,8 @@ impl Bubbles {
         let angle_step = 2.0 * std::f64::consts::PI / count as f64;
         for i in 0..count {
             let angle = angle_step * i as f64;
-            self.circles.push((radius as f64 * angle.cos(), radius as f64 * angle.sin()));
+            self.circles
+                .push((radius as f64 * angle.cos(), radius as f64 * angle.sin()));
         }
         self.circle_index.insert((radius, count), start);
         start
@@ -147,14 +150,28 @@ impl Bubbles {
                 unique += 1;
             }
         }
-        for k in 0..unique {
+        for (k, &point) in points[..unique].iter().enumerate() {
             let slot = self.chars[start + k];
             let path = e
-                .path_new(slot, POP_SPEED, Some(Easing::OutExpo), None, 0, false, self.pop_out)
+                .path_new(
+                    slot,
+                    POP_SPEED,
+                    Some(Easing::OutExpo),
+                    None,
+                    0,
+                    false,
+                    self.pop_out,
+                )
                 .expect("pop_out path");
-            e.path_new_waypoint(path, points[k], None, Name::NONE).expect("pop_out waypoint");
-            e.register_event(slot, Event::PathComplete, Caller::Path(self.pop_out), Action::ActivatePath(self.final_))
-                .expect("pop_out event");
+            e.path_new_waypoint(path, point, None, Name::NONE)
+                .expect("pop_out waypoint");
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(self.pop_out),
+                Action::ActivatePath(self.final_),
+            )
+            .expect("pop_out event");
         }
         let (pop_1, pop_out) = (self.pop_1, self.pop_out);
         for k in start..start + n {
@@ -189,10 +206,20 @@ fn other(message: String) -> EngineError {
 impl Effect for Bubbles {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let rainbow_stops: Vec<Color> = RAINBOW_STOPS.iter().map(|h| Color::from_hex(h).unwrap()).collect();
-        let rainbow = Gradient::with_steps(&rainbow_stops, 5, false).expect("rainbow gradient").spectrum;
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let rainbow_stops: Vec<Color> = RAINBOW_STOPS
+            .iter()
+            .map(|h| Color::from_hex(h).unwrap())
+            .collect();
+        let rainbow = Gradient::with_steps(&rainbow_stops, 5, false)
+            .expect("rainbow gradient")
+            .spectrum;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = e.canvas.clone();
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -210,17 +237,30 @@ impl Effect for Bubbles {
         let pop_color = config.pop_color;
         let pop_visual = |e: &mut Engine, symbol: &str| {
             let sym = e.sym(symbol);
-            e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(pop_color), bg: None, attrs: HAS_COLORS })
+            e.visuals.make(
+                &e.symbols,
+                VisualInfo {
+                    sym,
+                    fg: Some(pop_color),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                },
+            )
         };
         let star = pop_visual(e, "*");
         let tick = pop_visual(e, "'");
         let pop_spectrum = |color: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[pop_color, color], 8, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[pop_color, color], 8, false)
+                .map_err(other)?
+                .spectrum)
         };
         // (input symbol, final color) -> the final frames of a plain scene
         let mut final_memo: HashMap<(Sym, Color), Vec<Frame>, FxBuild> = HashMap::default();
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for &slot in &characters {
             let input_coord = e.input_coord(slot);
             let sym = e.input_sym(slot);
@@ -234,9 +274,11 @@ impl Effect for Bubbles {
                 let fg = e.input_fg(slot).map(pop_spectrum).transpose()?;
                 let bg = e.input_bg(slot).map(pop_spectrum).transpose()?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(final_scene, &[sym], 6, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(final_scene, &[sym], 6, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(final_scene, sym, 6, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(final_scene, sym, 6, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
                 let final_color = *final_gradient_mapping.get(&input_coord).unwrap();
@@ -245,23 +287,53 @@ impl Effect for Bubbles {
                     Some(frames) if plain => e.append_frames(final_scene, frames),
                     _ => {
                         let spectrum = pop_spectrum(final_color)?;
-                        e.apply_gradient(final_scene, &[sym], 6, Some(&spectrum), None).map_err(other)?;
+                        e.apply_gradient(final_scene, &[sym], 6, Some(&spectrum), None)
+                            .map_err(other)?;
                         if plain {
-                            final_memo.insert((sym, final_color), e.scenes.frames_of(final_scene).to_vec());
+                            final_memo.insert(
+                                (sym, final_color),
+                                e.scenes.frames_of(final_scene).to_vec(),
+                            );
                         }
                     }
                 }
             }
             let pop_2 = e.scene_name(pop_2_scene);
             let final_name = e.scene_name(final_scene);
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(self.pop_1), Action::ActivateScene(pop_2))
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(self.pop_1),
+                Action::ActivateScene(pop_2),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(pop_2),
+                Action::ActivateScene(final_name),
+            )
+            .map_err(other)?;
+            let path = e
+                .path_new(
+                    slot,
+                    POP_SPEED,
+                    Some(Easing::InOutExpo),
+                    None,
+                    0,
+                    false,
+                    self.final_,
+                )
                 .map_err(other)?;
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(pop_2), Action::ActivateScene(final_name))
+            e.path_new_waypoint(path, input_coord, None, Name::NONE)
                 .map_err(other)?;
-            let path = e.path_new(slot, POP_SPEED, Some(Easing::InOutExpo), None, 0, false, self.final_).map_err(other)?;
-            e.path_new_waypoint(path, input_coord, None, Name::NONE).map_err(other)?;
-            e.register_event(slot, Event::PathComplete, Caller::Path(self.final_), Action::SetLayer(0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(self.final_),
+                Action::SetLayer(0),
+            )
+            .map_err(other)?;
         }
 
         self.chars = e
@@ -271,20 +343,34 @@ impl Effect for Bubbles {
             .collect();
         // input symbol -> its visual in each rainbow color
         let mut rainbow_memo: HashMap<Sym, Vec<Visual>, FxBuild> = HashMap::default();
-        let mut sheen = vec![Frame { visual: Visual(0), duration: 4 }; rainbow.len()];
+        let mut sheen = vec![
+            Frame {
+                visual: Visual(0),
+                duration: 4
+            };
+            rainbow.len()
+        ];
         let space = e.sym(" ");
         let total = self.chars.len();
         let mut taken = 0;
         while taken < total {
             let remaining = total - taken;
-            let count = if remaining < 5 { remaining } else { e.rng.randint(5, remaining.min(20) as i64) as usize };
+            let count = if remaining < 5 {
+                remaining
+            } else {
+                e.rng.randint(5, remaining.min(20) as i64) as usize
+            };
             let group = taken..taken + count;
             let origin = Coord::new(e.rng.randint(canvas.left, canvas.right), canvas.top + 10);
             // Bubble.__init__
             let radius = (count as i64 / 5).max(1);
             let anchor = e.add_character_sym(space, origin);
             let lowest_row = if config.pop_condition == PopCondition::Row {
-                self.chars[group.clone()].iter().map(|&s| e.input_coord(s).row).min().unwrap()
+                self.chars[group.clone()]
+                    .iter()
+                    .map(|&s| e.input_coord(s).row)
+                    .min()
+                    .unwrap()
             } else {
                 canvas.bottom
             };
@@ -306,8 +392,24 @@ impl Effect for Bubbles {
             self.bubbles[b as usize].landed = false;
             // make_waypoints
             let waypoint_column = e.rng.randint(canvas.left, canvas.right);
-            let path = e.path_new(anchor, config.bubble_speed, None, None, 0, false, Name::NONE).map_err(other)?;
-            e.path_new_waypoint(path, Coord::new(waypoint_column, lowest_row), None, Name::NONE).map_err(other)?;
+            let path = e
+                .path_new(
+                    anchor,
+                    config.bubble_speed,
+                    None,
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
+                .map_err(other)?;
+            e.path_new_waypoint(
+                path,
+                Coord::new(waypoint_column, lowest_row),
+                None,
+                Name::NONE,
+            )
+            .map_err(other)?;
             e.activate_path(self, anchor, path);
             // make_gradients
             if config.rainbow {
@@ -322,7 +424,15 @@ impl Effect for Bubbles {
                         rainbow
                             .iter()
                             .map(|&c| {
-                                e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(c), bg: None, attrs: HAS_COLORS })
+                                e.visuals.make(
+                                    &e.symbols,
+                                    VisualInfo {
+                                        sym,
+                                        fg: Some(c),
+                                        bg: None,
+                                        attrs: HAS_COLORS,
+                                    },
+                                )
                             })
                             .collect()
                     });
@@ -341,7 +451,8 @@ impl Effect for Bubbles {
                     let slot = self.chars[k];
                     let sym = e.input_sym(slot);
                     let scene = e.scene_new(slot, Name::NONE, false, None, None);
-                    e.add_frame(scene, sym, 1, Some(ColorPair::new(Some(color), None)), 0).map_err(other)?;
+                    e.add_frame(scene, sym, 1, Some(ColorPair::new(Some(color), None)), 0)
+                        .map_err(other)?;
                     e.activate_scene(self, slot, scene);
                 }
             }
@@ -357,7 +468,9 @@ impl Effect for Bubbles {
         if self.animating.is_empty() && e.active_is_empty() && self.next == self.bubbles.len() {
             return false;
         }
-        if self.next < self.bubbles.len() && self.steps_since_last_bubble >= self.config.bubble_delay {
+        if self.next < self.bubbles.len()
+            && self.steps_since_last_bubble >= self.config.bubble_delay
+        {
             let bubble = &self.bubbles[self.next];
             for &slot in &self.chars[bubble.start as usize..(bubble.start + bubble.n) as usize] {
                 e.set_visible(slot, true);

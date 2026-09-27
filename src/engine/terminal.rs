@@ -111,7 +111,12 @@ pub struct CharacterFilter {
 
 impl Default for CharacterFilter {
     fn default() -> Self {
-        CharacterFilter { input_chars: true, inner_fill_chars: false, outer_fill_chars: false, added_chars: false }
+        CharacterFilter {
+            input_chars: true,
+            inner_fill_chars: false,
+            outer_fill_chars: false,
+            added_chars: false,
+        }
     }
 }
 
@@ -184,7 +189,10 @@ fn ordered_buckets(
             buckets[(character_key - first_key) as usize].push(id);
         }
     }
-    buckets.into_iter().filter(|bucket| !bucket.is_empty()).collect()
+    buckets
+        .into_iter()
+        .filter(|bucket| !bucket.is_empty())
+        .collect()
 }
 
 impl Terminal {
@@ -222,8 +230,13 @@ impl Terminal {
         let canvas = &terminal.canvas;
         for (index, &slot) in terminal.input_grid.iter().enumerate() {
             if slot != NONE {
-                let coord = Coord::new(index as i64 % canvas.right + 1, index as i64 / canvas.right + 1);
-                terminal.character_by_input_coord.insert(coord, CharId(slot));
+                let coord = Coord::new(
+                    index as i64 % canvas.right + 1,
+                    index as i64 / canvas.right + 1,
+                );
+                terminal
+                    .character_by_input_coord
+                    .insert(coord, CharId(slot));
             }
         }
         let neighbors = terminal.neighbors(&chars);
@@ -238,8 +251,15 @@ impl Terminal {
     /// characters: the terminal (with an empty arena and coordinate map) and
     /// every character as parsed, indexed by arena slot, fill characters
     /// included.
-    pub fn parse(input_data: &str, config: TerminalConfig) -> Result<(Self, Vec<InputChar>), EngineError> {
-        let input_data = if input_data.is_empty() { "No Input." } else { input_data };
+    pub fn parse(
+        input_data: &str,
+        config: TerminalConfig,
+    ) -> Result<(Self, Vec<InputChar>), EngineError> {
+        let input_data = if input_data.is_empty() {
+            "No Input."
+        } else {
+            input_data
+        };
         let mut chars: Vec<InputChar> = Vec::with_capacity(input_data.len() + input_data.len() / 8);
         let mut next_character_id: u32 = 0;
         let mut input_colors_frequency = ColorFrequency::default();
@@ -254,9 +274,15 @@ impl Terminal {
         }
         .preprocess(input_data)?;
 
-        let input_line_lengths: Vec<i64> = preprocessed_lines.iter().map(|l| l.len() as i64).collect();
+        let input_line_lengths: Vec<i64> =
+            preprocessed_lines.iter().map(|l| l.len() as i64).collect();
         let terminal_dimensions = get_terminal_dimensions();
-        let layout = compute_layout(&config, &input_line_lengths, terminal_dimensions.0, terminal_dimensions.1);
+        let layout = compute_layout(
+            &config,
+            &input_line_lengths,
+            terminal_dimensions.0,
+            terminal_dimensions.1,
+        );
         let mut canvas = Canvas::new(layout.canvas_height, layout.canvas_width);
         let Layout {
             column_offset: canvas_column_offset,
@@ -268,20 +294,26 @@ impl Terminal {
             ..
         } = layout;
 
-        let input_characters = setup_input_characters(&config, &mut canvas, &mut chars, preprocessed_lines)?
-            .into_iter()
-            .filter(|&id| {
-                let coord = chars[id.0 as usize].input_coord;
-                coord.row <= canvas.top && coord.column <= canvas.right
-            })
-            .collect::<Vec<_>>();
+        let input_characters =
+            setup_input_characters(&config, &mut canvas, &mut chars, preprocessed_lines)?
+                .into_iter()
+                .filter(|&id| {
+                    let coord = chars[id.0 as usize].input_coord;
+                    coord.row <= canvas.top && coord.column <= canvas.right
+                })
+                .collect::<Vec<_>>();
 
         // Terminal._make_fill_characters: row-major from (1,1), fresh space
         // characters for unoccupied canvas coordinates, split inner/outer by
         // the text bounds. Input characters lie inside the canvas, so a dense
         // grid over it is the coordinate map.
         let (width, height) = (canvas.right.max(0) as usize, canvas.top.max(0) as usize);
-        let mut input_grid = vec![NONE; width.checked_mul(height).expect("terminal canvas is too large")];
+        let mut input_grid = vec![
+            NONE;
+            width
+                .checked_mul(height)
+                .expect("terminal canvas is too large")
+        ];
         for &id in &input_characters {
             let c = chars[id.0 as usize].input_coord;
             input_grid[(c.row - 1) as usize * width + (c.column - 1) as usize] = id.0;
@@ -444,10 +476,23 @@ impl Terminal {
     }
 
     pub fn collect_characters(&self, filter: CharacterFilter) -> Vec<CharId> {
-        let capacity = if filter.input_chars { self.input_characters.len() } else { 0 }
-            + if filter.inner_fill_chars { self.inner_fill_characters.len() } else { 0 }
-            + if filter.outer_fill_chars { self.outer_fill_characters.len() } else { 0 }
-            + if filter.added_chars { self.added_characters.len() } else { 0 };
+        let capacity = if filter.input_chars {
+            self.input_characters.len()
+        } else {
+            0
+        } + if filter.inner_fill_chars {
+            self.inner_fill_characters.len()
+        } else {
+            0
+        } + if filter.outer_fill_chars {
+            self.outer_fill_characters.len()
+        } else {
+            0
+        } + if filter.added_chars {
+            self.added_characters.len()
+        } else {
+            0
+        };
         let mut all: Vec<CharId> = Vec::with_capacity(capacity);
         if filter.input_chars {
             all.extend(&self.input_characters);
@@ -465,7 +510,12 @@ impl Terminal {
     }
 
     /// Terminal.get_characters with all sort variants.
-    pub fn get_characters(&self, rng: &mut Rng, filter: CharacterFilter, sort: CharacterSort) -> Vec<CharId> {
+    pub fn get_characters(
+        &self,
+        rng: &mut Rng,
+        filter: CharacterFilter,
+        sort: CharacterSort,
+    ) -> Vec<CharId> {
         let mut all = self.collect_characters(filter);
         // default sort: (-row, column), stable
         all.sort_by_key(|&id| {
@@ -490,7 +540,11 @@ impl Terminal {
                 let mut deque: std::collections::VecDeque<CharId> = all.into();
                 let mut interleaved = Vec::with_capacity(deque.len());
                 let mut from_front = true;
-                while let Some(id) = if from_front { deque.pop_front() } else { deque.pop_back() } {
+                while let Some(id) = if from_front {
+                    deque.pop_front()
+                } else {
+                    deque.pop_back()
+                } {
                     interleaved.push(id);
                     from_front = !from_front;
                 }
@@ -504,7 +558,11 @@ impl Terminal {
     }
 
     /// Terminal.get_characters_grouped with all grouping variants.
-    pub fn get_characters_grouped(&self, filter: CharacterFilter, grouping: CharacterGroup) -> Vec<Vec<CharId>> {
+    pub fn get_characters_grouped(
+        &self,
+        filter: CharacterFilter,
+        grouping: CharacterGroup,
+    ) -> Vec<Vec<CharId>> {
         let mut all = self.collect_characters(filter);
         all.sort_by_key(|&id| {
             let c = self.arena[id.0 as usize].input_coord;
@@ -513,7 +571,8 @@ impl Terminal {
         let coord = |id: &CharId| self.arena[id.0 as usize].input_coord;
         match grouping {
             CharacterGroup::ColumnLeftToRight | CharacterGroup::ColumnRightToLeft => {
-                let mut columns = ordered_buckets(all, 0, self.canvas.right, |id| coord(&id).column);
+                let mut columns =
+                    ordered_buckets(all, 0, self.canvas.right, |id| coord(&id).column);
                 if grouping == CharacterGroup::ColumnRightToLeft {
                     columns.reverse();
                 }
@@ -526,17 +585,20 @@ impl Terminal {
                 }
                 rows
             }
-            CharacterGroup::DiagonalBottomLeftToTopRight | CharacterGroup::DiagonalTopRightToBottomLeft => {
-                let mut diagonals = ordered_buckets(all, 0, self.canvas.top + self.canvas.right, |id| {
-                    let c = coord(&id);
-                    c.row + c.column
-                });
+            CharacterGroup::DiagonalBottomLeftToTopRight
+            | CharacterGroup::DiagonalTopRightToBottomLeft => {
+                let mut diagonals =
+                    ordered_buckets(all, 0, self.canvas.top + self.canvas.right, |id| {
+                        let c = coord(&id);
+                        c.row + c.column
+                    });
                 if grouping == CharacterGroup::DiagonalTopRightToBottomLeft {
                     diagonals.reverse();
                 }
                 diagonals
             }
-            CharacterGroup::DiagonalTopLeftToBottomRight | CharacterGroup::DiagonalBottomRightToTopLeft => {
+            CharacterGroup::DiagonalTopLeftToBottomRight
+            | CharacterGroup::DiagonalBottomRightToTopLeft => {
                 let mut diagonals = ordered_buckets(
                     all,
                     self.canvas.left - self.canvas.top,
@@ -597,7 +659,9 @@ impl Terminal {
     fn update_render_cells(&mut self) -> (usize, usize) {
         let width = self.visible_right.max(0) as usize;
         let height = self.visible_top.max(0) as usize;
-        let cell_count = width.checked_mul(height).expect("terminal canvas is too large");
+        let cell_count = width
+            .checked_mul(height)
+            .expect("terminal canvas is too large");
         self.render_cells.resize(cell_count, EMPTY_RENDER_CELL);
         self.render_cells.fill(EMPTY_RENDER_CELL);
         self.render_visuals.resize(cell_count, std::ptr::null());
@@ -650,7 +714,13 @@ impl Terminal {
                 if cell == EMPTY_RENDER_CELL {
                     row.push(' ');
                 } else {
-                    row.push_str(arena[cell as usize].animation.current_character_visual.formatted_symbol.as_str());
+                    row.push_str(
+                        arena[cell as usize]
+                            .animation
+                            .current_character_visual
+                            .formatted_symbol
+                            .as_str(),
+                    );
                 }
             }
         }
@@ -771,7 +841,11 @@ impl Terminal {
         Ok(())
     }
 
-    pub fn print_frame(&mut self, out: &mut impl Write, output_string: &str) -> std::io::Result<()> {
+    pub fn print_frame(
+        &mut self,
+        out: &mut impl Write,
+        output_string: &str,
+    ) -> std::io::Result<()> {
         self.write_move_cursor_to_top(out)?;
         out.write_all(output_string.as_bytes())?;
         out.flush()
@@ -833,9 +907,7 @@ pub fn resize_settled(
 /// shutil.get_terminal_size semantics: COLUMNS/LINES env vars win; else query
 /// the tty; on failure (80, 24).
 pub fn get_terminal_dimensions() -> (i64, i64) {
-    let env_dim = |name: &str| -> Option<i64> {
-        std::env::var(name).ok()?.parse::<i64>().ok()
-    };
+    let env_dim = |name: &str| -> Option<i64> { std::env::var(name).ok()?.parse::<i64>().ok() };
     let columns = env_dim("COLUMNS");
     let lines = env_dim("LINES");
     if let (Some(c), Some(l)) = (columns, lines) {
@@ -921,7 +993,10 @@ fn get_canvas_dimensions(
         if config.ignore_terminal_dimensions {
             input_height
         } else if config.wrap_text {
-            std::cmp::min(wrapped_line_count(line_lengths, canvas_width), terminal_height)
+            std::cmp::min(
+                wrapped_line_count(line_lengths, canvas_width),
+                terminal_height,
+            )
         } else {
             std::cmp::min(terminal_height, input_height)
         }

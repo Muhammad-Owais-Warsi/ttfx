@@ -48,7 +48,11 @@ pub struct ParticlePool {
 impl ParticlePool {
     /// ParticlePool.__init__ without preallocation (call `preallocate` next,
     /// so the initializer can run against the engine).
-    pub fn new(symbols: Vec<Sym>, max_size: Option<usize>, coord: Option<Coord>) -> Result<Self, String> {
+    pub fn new(
+        symbols: Vec<Sym>,
+        max_size: Option<usize>,
+        coord: Option<Coord>,
+    ) -> Result<Self, String> {
         if symbols.is_empty() {
             return Err("ParticlePool requires at least one symbol.".to_string());
         }

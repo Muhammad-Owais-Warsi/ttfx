@@ -73,8 +73,13 @@ impl Effect for Print {
         self.carriage_return = e.name("carriage_return_path");
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -90,12 +95,18 @@ impl Effect for Print {
         let mut symbols: Vec<Sym> = BLOCKS.iter().map(|b| e.sym(b)).collect();
         symbols.push(space);
         let head_gradient = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[white, c], 5, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[white, c], 5, false)
+                .map_err(other)?
+                .spectrum)
         };
         // (symbol, final color) -> the typed frames of a plain scene
         let mut memo: HashMap<(Sym, Color), Vec<Frame>, FxBuild> = HashMap::default();
 
-        let filter = CharacterFilter { inner_fill_chars: true, outer_fill_chars: true, ..Default::default() };
+        let filter = CharacterFilter {
+            inner_fill_chars: true,
+            outer_fill_chars: true,
+            ..Default::default()
+        };
         let mut rows = e.get_characters_grouped(filter, CharacterGroup::RowTopToBottom);
         // PrintIterator.Row.__init__
         for row in &mut rows {
@@ -120,11 +131,16 @@ impl Effect for Print {
                     let fg = e.input_fg(slot).map(head_gradient).transpose()?;
                     let bg = e.input_bg(slot).map(head_gradient).transpose()?;
                     if fg.is_some() || bg.is_some() {
-                        e.apply_gradient(scene, &symbols, 3, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                        e.apply_gradient(scene, &symbols, 3, fg.as_deref(), bg.as_deref())
+                            .map_err(other)?;
                     } else {
-                        let head = Gradient::with_steps(&[white, white], 4, false).map_err(other)?.spectrum;
-                        e.apply_gradient(scene, &symbols[..4], 3, Some(&head), None).map_err(other)?;
-                        e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                        let head = Gradient::with_steps(&[white, white], 4, false)
+                            .map_err(other)?
+                            .spectrum;
+                        e.apply_gradient(scene, &symbols[..4], 3, Some(&head), None)
+                            .map_err(other)?;
+                        e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0)
+                            .map_err(other)?;
                     }
                 } else {
                     let final_fg = final_gradient_mapping.get(&input).copied().unwrap_or(white);
@@ -133,7 +149,8 @@ impl Effect for Print {
                         Some(frames) if plain => e.append_frames(scene, frames),
                         _ => {
                             let spectrum = head_gradient(final_fg)?;
-                            e.apply_gradient(scene, &symbols, 3, Some(&spectrum), None).map_err(other)?;
+                            e.apply_gradient(scene, &symbols, 3, Some(&spectrum), None)
+                                .map_err(other)?;
                             if plain {
                                 memo.insert((sym, final_fg), e.scenes.frames_of(scene).to_vec());
                             }
@@ -212,7 +229,8 @@ impl Effect for Print {
                     self.carriage_return,
                 )
                 .expect("fresh path table");
-            e.path_new_waypoint(path, Coord::new(target_column, 1), None, Name::NONE).expect("fresh waypoint");
+            e.path_new_waypoint(path, Coord::new(target_column, 1), None, Name::NONE)
+                .expect("fresh waypoint");
             e.activate_path(self, head, path);
             // contextlib.suppress(DuplicateEventRegistrationError): the same
             // (event, path id, callback) registers every row and is rejected

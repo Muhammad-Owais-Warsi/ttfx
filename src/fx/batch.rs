@@ -114,7 +114,13 @@ impl Adapt {
             },
             _ => POLICY_ON,
         };
-        Adapt { policy, on: policy != POLICY_OFF, n: CYCLE, with: 0, votes: 0 }
+        Adapt {
+            policy,
+            on: policy != POLICY_OFF,
+            n: CYCLE,
+            with: 0,
+            votes: 0,
+        }
     }
 }
 
@@ -186,7 +192,10 @@ fn tier() -> u8 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[inline]
-fn all_set4(v: std::arch::x86_64::__m256i, bits: std::arch::x86_64::__m256i) -> std::arch::x86_64::__m256i {
+fn all_set4(
+    v: std::arch::x86_64::__m256i,
+    bits: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256i {
     use std::arch::x86_64::*;
     _mm256_cmpeq_epi64(_mm256_and_si256(v, bits), bits)
 }
@@ -197,7 +206,10 @@ fn all_set4(v: std::arch::x86_64::__m256i, bits: std::arch::x86_64::__m256i) -> 
 #[inline]
 fn lane_mask4(lanes: u32) -> std::arch::x86_64::__m256i {
     use std::arch::x86_64::*;
-    all_set4(_mm256_set1_epi64x(lanes as i64), _mm256_setr_epi64x(1, 2, 4, 8))
+    all_set4(
+        _mm256_set1_epi64x(lanes as i64),
+        _mm256_setr_epi64x(1, 2, 4, 8),
+    )
 }
 
 /// The sign bits of four i32 lanes.
@@ -353,15 +365,16 @@ impl Engine {
     #[target_feature(enable = "neon")]
     #[inline(never)]
     fn motion_batch_neon(&mut self, w: usize, snapshot: u64) -> u64 {
-        use std::arch::aarch64::*;
         use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
         use crate::utils::simd::{
-            bits_u64x2 as bits, lane_mask2, load, load_f64x2, load_split_s64x2, load_u32x2, store_f64x2, store_u32x2,
-            widen_mask2,
+            bits_u64x2 as bits, lane_mask2, load, load_f64x2, load_split_s64x2, load_u32x2,
+            store_f64x2, store_u32x2, widen_mask2,
         };
+        use std::arch::aarch64::*;
 
         let (m, etab) = self.paths.mirrors_etab();
-        let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
+        let (ch_path, ch_coord, ch_scene) =
+            (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
         assert!(ch_coord.len() == ch_path.len() && ch_scene.len() == ch_path.len());
         let b = &mut self.batch;
         let (mut done, mut idle, mut quiet, mut bare) = (0u64, 0u64, 0u64, 0u64);
@@ -375,7 +388,10 @@ impl Engine {
         let int_max = vdupq_n_s64(i32::MAX as i64);
         // x rounds (to r) inside i32 above i32::MIN, and is not NaN
         let fits = |x: float64x2_t, r: int64x2_t| {
-            vandq_u64(vceqq_f64(x, x), vandq_u64(vcgtq_s64(r, int_min), vcleq_s64(r, int_max)))
+            vandq_u64(
+                vceqq_f64(x, x),
+                vandq_u64(vcgtq_s64(r, int_min), vcleq_s64(r, int_max)),
+            )
         };
         let mut pairs = snapshot;
         while pairs != 0 {
@@ -428,11 +444,19 @@ impl Engine {
             let [f0, f1]: [u8; 2] = load(&m.flags, s);
             let flags = vcombine_u64(vcreate_u64(f0 as u64), vcreate_u64(f1 as u64));
             let flag = |bit: u8| vtstq_u64(flags, vdupq_n_u64(bit as u64));
-            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let (lower, curve, clamp, over) = (
+                flag(MF_LOWER),
+                flag(MF_CURVE),
+                flag(MF_CLAMP),
+                flag(MF_OVER),
+            );
             let r = vsubq_f64(d, off);
             let within = vorrq_u64(vcleq_f64(r, hi), over);
             let r = vbslq_f64(over, vaddq_f64(r, hi), r);
-            let above = vorrq_u64(vreinterpretq_u64_u32(vmvnq_u32(vreinterpretq_u32_u64(lower))), vcgtq_f64(d, off));
+            let above = vorrq_u64(
+                vreinterpretq_u64_u32(vmvnq_u32(vreinterpretq_u32_u64(lower))),
+                vcgtq_f64(d, off),
+            );
             let ok = vandq_u64(vandq_u64(valid, within), above);
             // t = r / hi (0 for an empty segment; a linear ratio at most
             // 1.0, and fminnm picks 1.0 over NaN as f64::min does)
@@ -501,12 +525,15 @@ impl Engine {
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
     fn motion_batch_avx2(&mut self, w: usize, snapshot: u64) -> u64 {
-        use std::arch::x86_64::*;
         use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
-        use crate::utils::simd::{load, load_pd, load_si128, load2_si256, maskstore_pd, store_pd, store_si128};
+        use crate::utils::simd::{
+            load, load2_si256, load_pd, load_si128, maskstore_pd, store_pd, store_si128,
+        };
+        use std::arch::x86_64::*;
 
         let (m, etab) = self.paths.mirrors_etab();
-        let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
+        let (ch_path, ch_coord, ch_scene) =
+            (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
         assert!(ch_coord.len() == ch_path.len() && ch_scene.len() == ch_path.len());
         let b = &mut self.batch;
         let mut done = 0u64;
@@ -549,7 +576,10 @@ impl Engine {
             let max = load_pd(&m.max, s);
             let valid = _mm256_cmp_pd::<_CMP_LE_OQ>(step, max);
             let tab = load_si128(&m.etab, s);
-            let linear = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_cmpeq_epi32(tab, _mm_setzero_si128())));
+            let linear = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_cmpeq_epi32(
+                tab,
+                _mm_setzero_si128(),
+            )));
             let live = _mm256_castsi256_pd(lane_mask4(lanes));
             let gather = _mm256_and_pd(_mm256_andnot_pd(linear, valid), live);
             let ratio = _mm256_div_pd(step, max);
@@ -560,20 +590,31 @@ impl Engine {
                 // SAFETY: the gather reads etab only at lanes whose mirror
                 // names a table offset whose entries run past the step
                 // (step <= max_steps).
-                let eased = unsafe { _mm256_mask_i32gather_pd::<8>(zero, etab.as_ptr(), index, gather) };
+                let eased =
+                    unsafe { _mm256_mask_i32gather_pd::<8>(zero, etab.as_ptr(), index, gather) };
                 _mm256_blendv_pd(eased, ratio, linear)
             };
             let total = load_pd(&m.total, s);
             let d = _mm256_mul_pd(factor, total);
             let off = load_pd(&m.off, s);
             let hi = load_pd(&m.hi, s);
-            let flags = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(i32::from_ne_bytes(load(&m.flags, s))));
-            let flag = |bit: u8| _mm256_castsi256_pd(all_set4(flags, _mm256_set1_epi64x(bit as i64)));
-            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let flags =
+                _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(i32::from_ne_bytes(load(&m.flags, s))));
+            let flag =
+                |bit: u8| _mm256_castsi256_pd(all_set4(flags, _mm256_set1_epi64x(bit as i64)));
+            let (lower, curve, clamp, over) = (
+                flag(MF_LOWER),
+                flag(MF_CURVE),
+                flag(MF_CLAMP),
+                flag(MF_OVER),
+            );
             let r = _mm256_sub_pd(d, off);
             let within = _mm256_or_pd(_mm256_cmp_pd::<_CMP_LE_OQ>(r, hi), over);
             let r = _mm256_blendv_pd(r, _mm256_add_pd(r, hi), over);
-            let above = _mm256_or_pd(_mm256_andnot_pd(lower, _mm256_castsi256_pd(_mm256_set1_epi64x(-1))), _mm256_cmp_pd::<_CMP_GT_OQ>(d, off));
+            let above = _mm256_or_pd(
+                _mm256_andnot_pd(lower, _mm256_castsi256_pd(_mm256_set1_epi64x(-1))),
+                _mm256_cmp_pd::<_CMP_GT_OQ>(d, off),
+            );
             let ok = _mm256_and_pd(_mm256_and_pd(valid, within), above);
             // t = r / hi (0 for an empty segment; a linear ratio at most
             // 1.0, and min picks 1.0 over NaN as f64::min does)
@@ -581,7 +622,8 @@ impl Engine {
             let t = _mm256_blendv_pd(q, _mm256_min_pd(q, one), clamp);
             let t = _mm256_andnot_pd(_mm256_cmp_pd::<_CMP_EQ_OQ>(hi, zero), t);
             let u = _mm256_sub_pd(one, t);
-            let lerp = |a: __m256d, b: __m256d| _mm256_add_pd(_mm256_mul_pd(u, a), _mm256_mul_pd(t, b));
+            let lerp =
+                |a: __m256d, b: __m256d| _mm256_add_pd(_mm256_mul_pd(u, a), _mm256_mul_pd(t, b));
             // a line's control is its end: one lerp unless a lane curves
             let curves = _mm256_movemask_pd(_mm256_and_pd(curve, live)) != 0;
             let point = |start: &[f64], control: &[f64], end: &[f64]| {
@@ -628,9 +670,13 @@ impl Engine {
                 let ratio_step = _mm256_div_pd(_mm256_max_pd(step, one), _mm256_max_pd(max, one));
                 let whole = _mm256_max_pd(total, one);
                 let remaining = _mm256_max_pd(_mm256_sub_pd(total, d), one);
-                let ratio_d = _mm256_div_pd(_mm256_max_pd(_mm256_sub_pd(whole, remaining), one), whole);
+                let ratio_d =
+                    _mm256_div_pd(_mm256_max_pd(_mm256_sub_pd(whole, remaining), one), whole);
                 let ratio = _mm256_blendv_pd(ratio_d, ratio_step, by_step);
-                let last = _mm_sub_epi32(_mm_and_si128(key, _mm_set1_epi32(i32::MAX)), _mm_set1_epi32(1));
+                let last = _mm_sub_epi32(
+                    _mm_and_si128(key, _mm_set1_epi32(i32::MAX)),
+                    _mm_set1_epi32(1),
+                );
                 let index = _mm256_cvtpd_epi32(_mm256_mul_pd(_mm256_cvtepi32_pd(last), ratio));
                 let unknown = _mm_cmpeq_epi32(index, int_min);
                 let index = _mm_max_epi32(_mm_min_epi32(index, last), _mm_setzero_si128());
@@ -644,12 +690,15 @@ impl Engine {
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx512f,avx512vl,avx2")]
     fn motion_batch_avx512(&mut self, w: usize, snapshot: u64) -> u64 {
-        use std::arch::x86_64::*;
         use super::motion::{MF_CLAMP, MF_CURVE, MF_LOWER, MF_OVER};
-        use crate::utils::simd::{load, load_pd8, load_si256, load2_si512, mask_store_pd8, store_pd8, store_si256};
+        use crate::utils::simd::{
+            load, load2_si512, load_pd8, load_si256, mask_store_pd8, store_pd8, store_si256,
+        };
+        use std::arch::x86_64::*;
 
         let (m, etab) = self.paths.mirrors_etab();
-        let (ch_path, ch_coord, ch_scene) = (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
+        let (ch_path, ch_coord, ch_scene) =
+            (&self.ch.path[..], &self.ch.coord[..], &self.ch.scene[..]);
         assert!(ch_coord.len() == ch_path.len() && ch_scene.len() == ch_path.len());
         let b = &mut self.batch;
         let mut done = 0u64;
@@ -671,7 +720,10 @@ impl Engine {
                 while l != 0 {
                     let k = g * 8 + l.trailing_zeros() as usize;
                     l &= l - 1;
-                    if base + k < ch_path.len() && m.path[base + k] != NONE && m.path[base + k] == ch_path[base + k] {
+                    if base + k < ch_path.len()
+                        && m.path[base + k] != NONE
+                        && m.path[base + k] == ch_path[base + k]
+                    {
                         let bit = b.one(m, etab, base, k);
                         if bit != 0 {
                             b.classify(m, ch_coord, ch_scene, base, k);
@@ -684,7 +736,8 @@ impl Engine {
             debug_assert!(s + 8 <= m.path.len());
             let mp = load_si256(&m.path, s);
             let cp = load_si256(ch_path, s);
-            let lanes = lanes & _mm256_cmpeq_epi32_mask(mp, cp) & _mm256_cmpneq_epi32_mask(mp, none);
+            let lanes =
+                lanes & _mm256_cmpeq_epi32_mask(mp, cp) & _mm256_cmpneq_epi32_mask(mp, none);
             if lanes == 0 {
                 continue;
             }
@@ -709,16 +762,23 @@ impl Engine {
             } else {
                 let index = _mm256_add_epi32(tab, _mm512_cvttpd_epi32(step));
                 // SAFETY: as for motion_batch_avx2.
-                let eased = unsafe { _mm512_mask_i32gather_pd::<8>(zero, gather, index, etab.as_ptr()) };
+                let eased =
+                    unsafe { _mm512_mask_i32gather_pd::<8>(zero, gather, index, etab.as_ptr()) };
                 _mm512_mask_blend_pd(linear, eased, ratio)
             };
             let total = load_pd8(&m.total, s);
             let d = _mm512_mul_pd(factor, total);
             let off = load_pd8(&m.off, s);
             let hi = load_pd8(&m.hi, s);
-            let flags = _mm512_cvtepu8_epi64(_mm_cvtsi64_si128(i64::from_ne_bytes(load(&m.flags, s))));
+            let flags =
+                _mm512_cvtepu8_epi64(_mm_cvtsi64_si128(i64::from_ne_bytes(load(&m.flags, s))));
             let flag = |bit: u8| _mm512_test_epi64_mask(flags, _mm512_set1_epi64(bit as i64));
-            let (lower, curve, clamp, over) = (flag(MF_LOWER), flag(MF_CURVE), flag(MF_CLAMP), flag(MF_OVER));
+            let (lower, curve, clamp, over) = (
+                flag(MF_LOWER),
+                flag(MF_CURVE),
+                flag(MF_CLAMP),
+                flag(MF_OVER),
+            );
             let r = _mm512_sub_pd(d, off);
             let within = _mm512_cmp_pd_mask::<_CMP_LE_OQ>(r, hi) | over;
             let r = _mm512_mask_add_pd(r, over, r, hi);
@@ -730,7 +790,8 @@ impl Engine {
             let t = _mm512_mask_blend_pd(clamp, q, _mm512_min_pd(q, one));
             let t = _mm512_mask_blend_pd(_mm512_cmp_pd_mask::<_CMP_EQ_OQ>(hi, zero), t, zero);
             let u = _mm512_sub_pd(one, t);
-            let lerp = |a: __m512d, b: __m512d| _mm512_add_pd(_mm512_mul_pd(u, a), _mm512_mul_pd(t, b));
+            let lerp =
+                |a: __m512d, b: __m512d| _mm512_add_pd(_mm512_mul_pd(u, a), _mm512_mul_pd(t, b));
             let curves = curve & lanes != 0;
             let point = |start: &[f64], control: &[f64], end: &[f64]| {
                 let (a, e) = (load_pd8(start, s), load_pd8(end, s));
@@ -756,8 +817,10 @@ impl Engine {
             store_si256(&mut b.y, k, y);
             done |= (lanes as u64) << k;
             let [c0, c1] = load2_si512(ch_coord, s);
-            let cols = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14), c1);
-            let rows = _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15), c1);
+            let cols =
+                _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14), c1);
+            let rows =
+                _mm512_permutex2var_epi64(c0, _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15), c1);
             let same = _mm512_cmpeq_epi64_mask(cols, _mm512_cvtepi32_epi64(x))
                 & _mm512_cmpeq_epi64_mask(rows, _mm512_cvtepi32_epi64(y));
             let on = lanes & _mm512_cmp_pd_mask::<_CMP_NEQ_UQ>(step, max);
@@ -771,9 +834,13 @@ impl Engine {
                 let ratio_step = _mm512_div_pd(_mm512_max_pd(step, one), _mm512_max_pd(max, one));
                 let whole = _mm512_max_pd(total, one);
                 let remaining = _mm512_max_pd(_mm512_sub_pd(total, d), one);
-                let ratio_d = _mm512_div_pd(_mm512_max_pd(_mm512_sub_pd(whole, remaining), one), whole);
+                let ratio_d =
+                    _mm512_div_pd(_mm512_max_pd(_mm512_sub_pd(whole, remaining), one), whole);
                 let ratio = _mm512_mask_blend_pd(by_step, ratio_d, ratio_step);
-                let last = _mm256_sub_epi32(_mm256_and_si256(key, _mm256_set1_epi32(i32::MAX)), _mm256_set1_epi32(1));
+                let last = _mm256_sub_epi32(
+                    _mm256_and_si256(key, _mm256_set1_epi32(i32::MAX)),
+                    _mm256_set1_epi32(1),
+                );
                 let index = _mm512_cvtpd_epi32(_mm512_mul_pd(_mm512_cvtepi32_pd(last), ratio));
                 let unknown = _mm256_cmpeq_epi32_mask(index, int_min);
                 let index = _mm256_max_epi32(_mm256_min_epi32(index, last), _mm256_setzero_si256());

@@ -117,7 +117,11 @@ impl Fenwick {
         for (i, t) in tree.iter_mut().enumerate().skip(1) {
             *t = (i & i.wrapping_neg()) as u32;
         }
-        let top = if n == 0 { 0 } else { 1 << (usize::BITS - 1 - n.leading_zeros()) };
+        let top = if n == 0 {
+            0
+        } else {
+            1 << (usize::BITS - 1 - n.leading_zeros())
+        };
         Fenwick { tree, top }
     }
 
@@ -147,8 +151,13 @@ impl Fenwick {
 impl Effect for Unstable {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = e.canvas.clone();
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -163,14 +172,19 @@ impl Effect for Unstable {
         let gray = Color::from_hex("808080").unwrap();
         let unstable = config.unstable_color;
         let pair = |a: Color, b: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[a, b], 12, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[a, b], 12, false)
+                .map_err(other)?
+                .spectrum)
         };
         let explosion = e.name("explosion");
         let reassembly = e.name("reassembly");
         let rumble = e.name("rumble");
         let final_ = e.name("final");
 
-        let order = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let order = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         let n = e.char_count();
         self.jumbled = vec![Coord::new(0, 0); n];
         self.target = vec![Coord::new(0, 0); n];
@@ -179,7 +193,8 @@ impl Effect for Unstable {
         self.final_scene = vec![0; n];
         let mut fenwick = Fenwick::new(order.len());
         // (symbol, final color) -> the rumble and final frames of plain scenes
-        let mut memo: HashMap<(Sym, Color), (Vec<Frame>, Vec<Frame>), FxBuild> = HashMap::default();
+        type RumbleFinal = (Vec<Frame>, Vec<Frame>);
+        let mut memo: HashMap<(Sym, Color), RumbleFinal, FxBuild> = HashMap::default();
         for (k, &slot) in order.iter().enumerate() {
             let (col, row) = match e.rng.randint(0, 3) {
                 0 => (canvas.left, canvas.random_row(&mut e.rng, false)),
@@ -196,14 +211,32 @@ impl Effect for Unstable {
             self.target[s] = target;
             e.set_coordinate(slot, jumbled);
             let path = e
-                .path_new(slot, config.explosion_speed, Some(config.explosion_ease), None, 0, false, explosion)
+                .path_new(
+                    slot,
+                    config.explosion_speed,
+                    Some(config.explosion_ease),
+                    None,
+                    0,
+                    false,
+                    explosion,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, target, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, target, None, Name::NONE)
+                .map_err(other)?;
             self.explosion[s] = path;
             let path = e
-                .path_new(slot, config.reassembly_speed, Some(config.reassembly_ease), None, 0, false, reassembly)
+                .path_new(
+                    slot,
+                    config.reassembly_speed,
+                    Some(config.reassembly_ease),
+                    None,
+                    0,
+                    false,
+                    reassembly,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE)
+                .map_err(other)?;
             self.reassembly[s] = path;
 
             let sym = e.input_sym(slot);
@@ -213,26 +246,43 @@ impl Effect for Unstable {
                 let start_fg = fg.unwrap_or(gray);
                 let fg_spectrum = pair(start_fg, unstable)?;
                 let bg_spectrum = bg.map(|bg| pair(bg, unstable)).transpose()?;
-                e.apply_gradient(rumble_scene, &[sym], 10, Some(&fg_spectrum), bg_spectrum.as_deref())
-                    .map_err(other)?;
+                e.apply_gradient(
+                    rumble_scene,
+                    &[sym],
+                    10,
+                    Some(&fg_spectrum),
+                    bg_spectrum.as_deref(),
+                )
+                .map_err(other)?;
                 let scene = e.scene_new(slot, final_, false, None, None);
                 self.final_scene[s] = scene;
                 if fg.is_none() && bg.is_none() {
-                    e.apply_gradient(scene, &[sym], 3, Some(&pair(unstable, gray)?), None).map_err(other)?;
-                    e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], 3, Some(&pair(unstable, gray)?), None)
+                        .map_err(other)?;
+                    e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 } else {
                     let fg_spectrum = fg.map(|fg| pair(unstable, fg)).transpose()?;
                     let bg_spectrum = bg.map(|bg| pair(unstable, bg)).transpose()?;
-                    e.apply_gradient(scene, &[sym], 3, fg_spectrum.as_deref(), bg_spectrum.as_deref())
-                        .map_err(other)?;
+                    e.apply_gradient(
+                        scene,
+                        &[sym],
+                        3,
+                        fg_spectrum.as_deref(),
+                        bg_spectrum.as_deref(),
+                    )
+                    .map_err(other)?;
                     if fg.is_none() {
-                        e.add_frame(scene, sym, 3, Some(ColorPair::new(None, bg)), 0).map_err(other)?;
+                        e.add_frame(scene, sym, 3, Some(ColorPair::new(None, bg)), 0)
+                            .map_err(other)?;
                     }
                 }
                 e.activate_scene(self, slot, rumble_scene);
                 e.set_appearance(slot, Some(sym), Some(ColorPair::new(Some(start_fg), bg)));
             } else {
-                let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping fg");
+                let final_fg = *final_gradient_mapping
+                    .get(&e.input_coord(slot))
+                    .expect("gradient mapping fg");
                 let plain = e.scene(rumble_scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                 let scene = match memo.get(&(sym, final_fg)) {
                     Some((rumble_frames, final_frames)) if plain => {
@@ -242,14 +292,24 @@ impl Effect for Unstable {
                         scene
                     }
                     _ => {
-                        e.apply_gradient(rumble_scene, &[sym], 10, Some(&pair(final_fg, unstable)?), None)
-                            .map_err(other)?;
+                        e.apply_gradient(
+                            rumble_scene,
+                            &[sym],
+                            10,
+                            Some(&pair(final_fg, unstable)?),
+                            None,
+                        )
+                        .map_err(other)?;
                         let scene = e.scene_new(slot, final_, false, None, None);
-                        e.apply_gradient(scene, &[sym], 3, Some(&pair(unstable, final_fg)?), None).map_err(other)?;
+                        e.apply_gradient(scene, &[sym], 3, Some(&pair(unstable, final_fg)?), None)
+                            .map_err(other)?;
                         if plain {
                             memo.insert(
                                 (sym, final_fg),
-                                (e.scenes.frames_of(rumble_scene).to_vec(), e.scenes.frames_of(scene).to_vec()),
+                                (
+                                    e.scenes.frames_of(rumble_scene).to_vec(),
+                                    e.scenes.frames_of(scene).to_vec(),
+                                ),
                             );
                         }
                         scene
@@ -284,13 +344,18 @@ impl Effect for Unstable {
         }
         if self.phase == Phase::Rumble {
             if self.current_rumble_steps < MAX_RUMBLE_STEPS {
-                if self.current_rumble_steps > 30 && self.current_rumble_steps % self.rumble_mod_delay == 0 {
+                if self.current_rumble_steps > 30
+                    && self.current_rumble_steps % self.rumble_mod_delay == 0
+                {
                     let row_offset = e.rng.choice_index(3) as i64 - 1;
                     let column_offset = e.rng.choice_index(3) as i64 - 1;
                     for k in 0..self.order.len() {
                         let slot = *self.order.at(k);
                         let current = e.coord(slot);
-                        e.set_coordinate(slot, Coord::new(current.column + column_offset, current.row + row_offset));
+                        e.set_coordinate(
+                            slot,
+                            Coord::new(current.column + column_offset, current.row + row_offset),
+                        );
                     }
                     self.restore_pending = true;
                     self.rumble_mod_delay = (self.rumble_mod_delay - 1).max(1);

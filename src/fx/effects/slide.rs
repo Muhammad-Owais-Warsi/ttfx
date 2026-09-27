@@ -63,8 +63,13 @@ impl Effect for Slide {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -94,22 +99,43 @@ impl Effect for Slide {
             let start = self.chars.len();
             for &slot in group {
                 let path = e
-                    .path_new(slot, config.movement_speed, Some(config.movement_easing), None, 0, false, input_path)
+                    .path_new(
+                        slot,
+                        config.movement_speed,
+                        Some(config.movement_easing),
+                        None,
+                        0,
+                        false,
+                        input_path,
+                    )
                     .map_err(other)?;
-                e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE).map_err(other)?;
+                e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE)
+                    .map_err(other)?;
                 self.chars.push((slot, path));
             }
-            let flip = if config.merge { index % 2 == 0 } else { config.reverse_direction };
+            let flip = if config.merge {
+                index % 2 == 0
+            } else {
+                config.reverse_direction
+            };
             let mut reversed = !flip;
             match config.grouping {
                 SlideGrouping::Row => {
-                    let column = if flip { canvas.right + 1 } else { canvas.left - 1 };
+                    let column = if flip {
+                        canvas.right + 1
+                    } else {
+                        canvas.left - 1
+                    };
                     for &slot in group {
                         e.set_coordinate(slot, Coord::new(column, e.input_coord(slot).row));
                     }
                 }
                 SlideGrouping::Column => {
-                    let row = if flip { canvas.bottom - 1 } else { canvas.top + 1 };
+                    let row = if flip {
+                        canvas.bottom - 1
+                    } else {
+                        canvas.top + 1
+                    };
                     for &slot in group {
                         e.set_coordinate(slot, Coord::new(e.input_coord(slot).column, row));
                     }
@@ -135,16 +161,27 @@ impl Effect for Slide {
                 let scene = e.scene_new(slot, scene_name, false, None, None);
                 if dynamic {
                     let colors = ColorPair::new(e.input_fg(slot), e.input_bg(slot));
-                    e.add_frame(scene, sym, config.final_gradient_frames, Some(colors), 0).map_err(other)?;
+                    e.add_frame(scene, sym, config.final_gradient_frames, Some(colors), 0)
+                        .map_err(other)?;
                 } else {
-                    let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping fg");
+                    let final_fg = *final_gradient_mapping
+                        .get(&e.input_coord(slot))
+                        .expect("gradient mapping fg");
                     let plain = e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                     match memo.get(&(sym, final_fg)) {
                         Some(frames) if plain => e.append_frames(scene, frames),
                         _ => {
-                            let spectrum = Gradient::with_steps(&[first_stop, final_fg], 10, false).map_err(other)?.spectrum;
-                            e.apply_gradient(scene, &[sym], config.final_gradient_frames, Some(&spectrum), None)
-                                .map_err(other)?;
+                            let spectrum = Gradient::with_steps(&[first_stop, final_fg], 10, false)
+                                .map_err(other)?
+                                .spectrum;
+                            e.apply_gradient(
+                                scene,
+                                &[sym],
+                                config.final_gradient_frames,
+                                Some(&spectrum),
+                                None,
+                            )
+                            .map_err(other)?;
                             if plain {
                                 memo.insert((sym, final_fg), e.scenes.frames_of(scene).to_vec());
                             }

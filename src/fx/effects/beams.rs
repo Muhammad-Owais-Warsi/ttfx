@@ -19,8 +19,12 @@ use crate::fx::scene::Frame;
 use crate::fx::{At, Engine, FxBuild, Hooks, Sym, NONE};
 use crate::utils::graphics::{Color, ColorPair, Gradient};
 
-const ALL_CHARS: CharacterFilter =
-    CharacterFilter { input_chars: true, inner_fill_chars: true, outer_fill_chars: true, added_chars: false };
+const ALL_CHARS: CharacterFilter = CharacterFilter {
+    input_chars: true,
+    inner_fill_chars: true,
+    outer_fill_chars: true,
+    added_chars: false,
+};
 
 /// Scene indices in `Beams::scenes`: a group's direction picks its beam scene.
 const ROW: usize = 0;
@@ -76,13 +80,22 @@ impl Beams {
 
     /// Group.__init__ (the rows and columns come sorted along the group).
     fn make_group(&self, e: &mut Engine, mut chars: Vec<u32>, direction: usize) -> Group {
-        let (lo, hi) =
-            if direction == ROW { self.config.beam_row_speed_range } else { self.config.beam_column_speed_range };
+        let (lo, hi) = if direction == ROW {
+            self.config.beam_row_speed_range
+        } else {
+            self.config.beam_column_speed_range
+        };
         let speed = e.rng.randint(lo, hi) as f64 * 0.1;
         if e.rng.choice_index(2) == 0 {
             chars.reverse();
         }
-        Group { chars, pos: 0, direction, speed, counter: 0.0 }
+        Group {
+            chars,
+            pos: 0,
+            direction,
+            speed,
+            counter: 0.0,
+        }
     }
 }
 
@@ -97,16 +110,26 @@ type Fades = Option<(Vec<Color>, Vec<Color>)>;
 
 /// Gradient([from, to], 10).spectrum.
 fn pair_spectrum(from: Color, to: Color) -> Result<Vec<Color>, EngineError> {
-    Ok(Gradient::with_steps(&[from, to], 10, false).map_err(other)?.spectrum)
+    Ok(Gradient::with_steps(&[from, to], 10, false)
+        .map_err(other)?
+        .spectrum)
 }
 
 impl Effect for Beams {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        self.wipe = e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalTopLeftToBottomRight);
+        self.wipe = e.get_characters_grouped(
+            CharacterFilter::default(),
+            CharacterGroup::DiagonalTopLeftToBottomRight,
+        );
 
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -122,8 +145,13 @@ impl Effect for Beams {
         let black = Color::from_hex("#000000").unwrap();
         let characters = e.get_characters(ALL_CHARS, CharacterSort::TopToBottomLeftToRight);
 
-        let beam_gradient =
-            Gradient::new(&config.beam_gradient_stops, &config.beam_gradient_steps, false, false).map_err(other)?;
+        let beam_gradient = Gradient::new(
+            &config.beam_gradient_stops,
+            &config.beam_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         for row in e.get_characters_grouped(ALL_CHARS, CharacterGroup::RowTopToBottom) {
             let group = self.make_group(e, row, ROW);
             self.groups.push(group);
@@ -133,25 +161,38 @@ impl Effect for Beams {
             self.groups.push(group);
         }
 
-        let names = [e.name("beam_row"), e.name("beam_column"), e.name("brighten")];
+        let names = [
+            e.name("beam_row"),
+            e.name("beam_column"),
+            e.name("brighten"),
+        ];
         let beam_symbols: [Vec<Sym>; 2] = [
             config.beam_row_symbols.iter().map(|s| e.sym(s)).collect(),
-            config.beam_column_symbols.iter().map(|s| e.sym(s)).collect(),
+            config
+                .beam_column_symbols
+                .iter()
+                .map(|s| e.sym(s))
+                .collect(),
         ];
         self.scenes = vec![[NONE; 3]; e.char_count()];
         // (symbol, fg, bg) -> the character whose plain scenes have them
         let mut beam_frames: [Option<Vec<Frame>>; 2] = [None, None];
-        let mut memo: HashMap<(Sym, Option<Color>, Option<Color>), u32, FxBuild> = HashMap::default();
+        let mut memo: HashMap<(Sym, Option<Color>, Option<Color>), u32, FxBuild> =
+            HashMap::default();
         for slot in characters {
             let (fg, bg) = if e.is_fill(slot) {
                 (Some(black), None)
             } else if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
             let sym = e.input_sym(slot);
-            let plain = !(handling == ExistingColorHandling::Always && e.uses_preexisting_colors(slot));
+            let plain =
+                !(handling == ExistingColorHandling::Always && e.uses_preexisting_colors(slot));
             if plain {
                 if let Some(&source) = memo.get(&(sym, fg, bg)) {
                     let from = self.scenes[source as usize];
@@ -172,8 +213,14 @@ impl Effect for Beams {
                     Some(frames) if plain => e.append_frames(ids[k], frames),
                     _ => {
                         let spectrum = Some(&beam_gradient.spectrum[..]);
-                        e.apply_gradient(ids[k], &beam_symbols[k], config.beam_gradient_frames, spectrum, None)
-                            .map_err(other)?;
+                        e.apply_gradient(
+                            ids[k],
+                            &beam_symbols[k],
+                            config.beam_gradient_frames,
+                            spectrum,
+                            None,
+                        )
+                        .map_err(other)?;
                         if plain {
                             beam_frames[k] = Some(e.scenes.frames_of(ids[k]).to_vec());
                         }
@@ -193,17 +240,27 @@ impl Effect for Beams {
             let bg_fades = fades(bg)?;
             let has = fg_fades.is_some() || bg_fades.is_some();
             let fade = |i: usize| {
-                (fg_fades.as_ref().map(|f| if i == 0 { &f.0[..] } else { &f.1[..] }), bg_fades
-                    .as_ref()
-                    .map(|b| if i == 0 { &b.0[..] } else { &b.1[..] }))
+                (
+                    fg_fades
+                        .as_ref()
+                        .map(|f| if i == 0 { &f.0[..] } else { &f.1[..] }),
+                    bg_fades
+                        .as_ref()
+                        .map(|b| if i == 0 { &b.0[..] } else { &b.1[..] }),
+                )
             };
             for k in [ROW, COLUMN, BRIGHTEN] {
-                let (duration, (fg_spectrum, bg_spectrum)) =
-                    if k == BRIGHTEN { (config.final_gradient_frames, fade(1)) } else { (2, fade(0)) };
-                if has {
-                    e.apply_gradient(ids[k], &[sym], duration, fg_spectrum, bg_spectrum).map_err(other)?;
+                let (duration, (fg_spectrum, bg_spectrum)) = if k == BRIGHTEN {
+                    (config.final_gradient_frames, fade(1))
                 } else {
-                    e.add_frame(ids[k], sym, duration, Some(ColorPair::default()), 0).map_err(other)?;
+                    (2, fade(0))
+                };
+                if has {
+                    e.apply_gradient(ids[k], &[sym], duration, fg_spectrum, bg_spectrum)
+                        .map_err(other)?;
+                } else {
+                    e.add_frame(ids[k], sym, duration, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             }
         }
@@ -268,13 +325,17 @@ impl Effect for Beams {
                     }
                 }
                 self.active.truncate(kept);
-                if self.next_pending == self.groups.len() && self.active.is_empty() && e.active_is_empty() {
+                if self.next_pending == self.groups.len()
+                    && self.active.is_empty()
+                    && e.active_is_empty()
+                {
                     self.phase = Phase::FinalWipe;
                 }
             }
             Phase::FinalWipe => {
                 if self.next_wipe < self.wipe.len() {
-                    let end = (self.next_wipe + self.config.final_wipe_speed as usize).min(self.wipe.len());
+                    let end = (self.next_wipe + self.config.final_wipe_speed as usize)
+                        .min(self.wipe.len());
                     for w in self.next_wipe..end {
                         for k in 0..self.wipe.at(w).len() {
                             let slot = *self.wipe.at(w).at(k);

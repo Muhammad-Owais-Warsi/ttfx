@@ -72,9 +72,12 @@ impl LaserEtch {
     /// beam characters, matching upstream's character_id allocation order.
     fn make_laser(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let laser_gradient = Gradient::new(&config.laser_gradient_stops, &[6], true, true).map_err(other)?.spectrum;
-        let spark_gradient =
-            Gradient::new(&config.spark_gradient_stops, &[3, 8], false, false).map_err(other)?.spectrum;
+        let laser_gradient = Gradient::new(&config.laser_gradient_stops, &[6], true, true)
+            .map_err(other)?
+            .spectrum;
+        let spark_gradient = Gradient::new(&config.spark_gradient_stops, &[3, 8], false, false)
+            .map_err(other)?
+            .spectrum;
 
         // Laser._make_sparks_pool
         self.spark = e.name("spark");
@@ -83,18 +86,34 @@ impl LaserEtch {
             let frames = spark_gradient
                 .iter()
                 .map(|&color| {
-                    let info = VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS };
-                    Frame { visual: e.visuals.make(&e.symbols, info), duration: config.spark_cooling_frames as u32 }
+                    let info = VisualInfo {
+                        sym,
+                        fg: Some(color),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    };
+                    Frame {
+                        visual: e.visuals.make(&e.symbols, info),
+                        duration: config.spark_cooling_frames as u32,
+                    }
                 })
                 .collect();
             self.spark_frames.push((sym, frames));
         }
         let mut pool = ParticlePool::new(symbols, None, None).map_err(other)?;
         let (spark, spark_frames) = (self.spark, &self.spark_frames);
-        pool.preallocate(e, SPARK_COUNT, |e, slot| initialize_spark(e, slot, spark, spark_frames)).map_err(other)?;
+        pool.preallocate(e, SPARK_COUNT, |e, slot| {
+            initialize_spark(e, slot, spark, spark_frames)
+        })
+        .map_err(other)?;
         for &slot in &pool.particles {
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(spark), Action::Callback(CB_RECLAIM_SPARK, 0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(spark),
+                Action::Callback(CB_RECLAIM_SPARK, 0),
+            )
+            .map_err(other)?;
         }
         self.pool = Some(pool);
 
@@ -112,7 +131,8 @@ impl LaserEtch {
             let sym = e.input_sym(slot);
             let r = row as usize % len.max(1);
             for &color in laser_gradient[r..].iter().chain(&laser_gradient[..r]) {
-                e.add_frame(scene, sym, 3, Some(ColorPair::new(Some(color), None)), 0).map_err(other)?;
+                e.add_frame(scene, sym, 3, Some(ColorPair::new(Some(color), None)), 0)
+                    .map_err(other)?;
             }
             e.activate_scene(self, slot, scene);
             row += 1;
@@ -126,7 +146,10 @@ impl LaserEtch {
         let mut pool = self.pool.take().expect("laser missing");
         self.position = target;
         for (k, &slot) in self.beam.iter().enumerate() {
-            e.set_coordinate(slot, Coord::new(target.column + k as i64, target.row + k as i64));
+            e.set_coordinate(
+                slot,
+                Coord::new(target.column + k as i64, target.row + k as i64),
+            );
         }
         // ParticlePool.emit: acquire -> position -> setup_spark_path ->
         // visibility -> activate
@@ -139,12 +162,14 @@ impl LaserEtch {
             e.set_coordinate(slot, position);
             // setup_spark_path
             e.set_coordinate(slot, position);
-            let path =
-                e.path_new(slot, 0.3, Some(Easing::OutSine), None, 0, false, Name::NONE).expect("spark path");
+            let path = e
+                .path_new(slot, 0.3, Some(Easing::OutSine), None, 0, false, Name::NONE)
+                .expect("spark path");
             let column = e.rng.randint(position.column - 20, position.column + 20);
             let fall_target = Coord::new(column, e.canvas.bottom);
             let control = Coord::new(column, position.row + e.rng.randint(-10, 20));
-            e.path_new_waypoint(path, fall_target, Some(&[control]), Name::NONE).expect("spark waypoint");
+            e.path_new_waypoint(path, fall_target, Some(&[control]), Name::NONE)
+                .expect("spark waypoint");
             e.activate_path(self, slot, path);
             e.activate_scene_name(self, slot, spark);
             e.set_visible(slot, true);
@@ -160,7 +185,10 @@ fn initialize_spark(e: &mut Engine, slot: u32, spark: Name, spark_frames: &[(Sym
     e.set_layer(slot, 2);
     let scene = e.scene_new(slot, spark, false, None, None);
     let sym = e.input_sym(slot);
-    let (_, frames) = spark_frames.iter().find(|(s, _)| *s == sym).expect("pool symbol");
+    let (_, frames) = spark_frames
+        .iter()
+        .find(|(s, _)| *s == sym)
+        .expect("pool symbol");
     e.add_frames_visual(scene, frames).expect("spark frame");
 }
 
@@ -183,8 +211,13 @@ impl Effect for LaserEtch {
         // LaserEtchIterator.build
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -201,20 +234,36 @@ impl Effect for LaserEtch {
         let yellow = Color::from_hex("ffe680").unwrap();
         let white = Color::from_hex("ffffff").unwrap();
         let cool = |stops: &[Color]| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(stops, 8, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(stops, 8, false)
+                .map_err(other)?
+                .spectrum)
         };
         // dynamic: one cool gradient for all; else the last final color and
         // its cool gradient (the cool stops, then the final color)
-        let dynamic_cool = if dynamic { cool(&config.cool_gradient_stops)? } else { Vec::new() };
+        let dynamic_cool = if dynamic {
+            cool(&config.cool_gradient_stops)?
+        } else {
+            Vec::new()
+        };
         let mut last_cool: Option<(Color, Vec<Color>)> = None;
         let mut cool_stops = config.cool_gradient_stops.clone();
         cool_stops.push(white);
         // (symbol, final color) -> the "^" + cool frames of a plain scene
         let mut memo: HashMap<(Sym, Option<Color>), Vec<Frame>, FxBuild> = HashMap::default();
-        let caret_visual =
-            e.visuals.make(&e.symbols, VisualInfo { sym: caret, fg: Some(yellow), bg: None, attrs: HAS_COLORS });
+        let caret_visual = e.visuals.make(
+            &e.symbols,
+            VisualInfo {
+                sym: caret,
+                fg: Some(yellow),
+                bg: None,
+                attrs: HAS_COLORS,
+            },
+        );
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         e.scenes.reserve(characters.len(), characters.len() * 10);
         for &slot in &characters {
             let sym = e.input_sym(slot);
@@ -232,10 +281,21 @@ impl Effect for LaserEtch {
             let plain = e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
             let frames = memo.entry((sym, key)).or_insert_with(|| {
                 let mut frames = Vec::with_capacity(spectrum.len() + 1);
-                frames.push(Frame { visual: caret_visual, duration: 3 });
+                frames.push(Frame {
+                    visual: caret_visual,
+                    duration: 3,
+                });
                 for &color in spectrum {
-                    let info = VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS };
-                    frames.push(Frame { visual: e.visuals.make(&e.symbols, info), duration: 3 });
+                    let info = VisualInfo {
+                        sym,
+                        fg: Some(color),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    };
+                    frames.push(Frame {
+                        visual: e.visuals.make(&e.symbols, info),
+                        duration: 3,
+                    });
                 }
                 frames
             });
@@ -251,11 +311,14 @@ impl Effect for LaserEtch {
                 if fg.is_some() || bg.is_some() {
                     let fg = fg.map(pair).transpose()?;
                     let bg = bg.map(pair).transpose()?;
-                    e.apply_gradient(scene, &[sym], 3, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], 3, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
                     let white_cooldown = pair(white)?;
-                    e.apply_gradient(scene, &[sym], 3, Some(&white_cooldown), None).map_err(other)?;
-                    e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], 3, Some(&white_cooldown), None)
+                        .map_err(other)?;
+                    e.add_frame(scene, sym, 3, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             }
             e.activate_scene(self, slot, scene);
@@ -281,8 +344,13 @@ impl Effect for LaserEtch {
         }
         if self.char_delay == 0 {
             for _ in 0..self.config.etch_speed {
-                let Some(mut next) = self.pop_pending() else { break };
-                while e.input_sym(next) == self.space && e.input_fg(next).is_none() && e.input_bg(next).is_none() {
+                let Some(mut next) = self.pop_pending() else {
+                    break;
+                };
+                while e.input_sym(next) == self.space
+                    && e.input_fg(next).is_none()
+                    && e.input_bg(next).is_none()
+                {
                     match self.pop_pending() {
                         Some(slot) => next = slot,
                         None => break,

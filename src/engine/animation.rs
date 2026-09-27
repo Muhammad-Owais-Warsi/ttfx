@@ -38,7 +38,9 @@ pub(crate) fn resolve_color_code(
     }
     if use_xterm_colors {
         return Some(ColorCode::Xterm(
-            color.xterm_color.unwrap_or_else(|| hexterm::hex_to_xterm(&color.rgb_color)),
+            color
+                .xterm_color
+                .unwrap_or_else(|| hexterm::hex_to_xterm(&color.rgb_color)),
         ));
     }
     let hex = match reusable {
@@ -69,7 +71,10 @@ const INLINE_SYMBOL_CAPACITY: usize = 63;
 /// case fits in 32 bytes; heavily styled symbols use the full inline buffer.
 #[derive(Debug, Clone)]
 pub enum FormattedSymbol {
-    Inline { bytes: [u8; INLINE_SYMBOL_CAPACITY], len: u8 },
+    Inline {
+        bytes: [u8; INLINE_SYMBOL_CAPACITY],
+        len: u8,
+    },
     Heap(Box<str>),
 }
 
@@ -78,7 +83,10 @@ impl FormattedSymbol {
         if text.len() <= INLINE_SYMBOL_CAPACITY {
             let mut bytes = [0u8; INLINE_SYMBOL_CAPACITY];
             bytes[..text.len()].copy_from_slice(text.as_bytes());
-            FormattedSymbol::Inline { bytes, len: text.len() as u8 }
+            FormattedSymbol::Inline {
+                bytes,
+                len: text.len() as u8,
+            }
         } else {
             FormattedSymbol::Heap(text.into())
         }
@@ -177,9 +185,18 @@ impl Eq for CharacterVisual {}
 impl std::hash::Hash for CharacterVisual {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.symbol.hash(state);
-        let flags = [self.bold, self.dim, self.italic, self.underline, self.blink, self.reverse, self.hidden, self.strike]
-            .iter()
-            .fold(0u8, |acc, &flag| acc << 1 | flag as u8);
+        let flags = [
+            self.bold,
+            self.dim,
+            self.italic,
+            self.underline,
+            self.blink,
+            self.reverse,
+            self.hidden,
+            self.strike,
+        ]
+        .iter()
+        .fold(0u8, |acc, &flag| acc << 1 | flag as u8);
         state.write_u8(flags);
         self.colors.hash(state);
         self.fg_color_code.hash(state);
@@ -243,7 +260,10 @@ impl CharacterVisual {
             colors: p.colors,
             fg_color_code: p.fg_color_code,
             bg_color_code: p.bg_color_code,
-            formatted_symbol: FormattedSymbol::Inline { bytes: [0; INLINE_SYMBOL_CAPACITY], len: 0 },
+            formatted_symbol: FormattedSymbol::Inline {
+                bytes: [0; INLINE_SYMBOL_CAPACITY],
+                len: 0,
+            },
         }
     }
 
@@ -366,9 +386,14 @@ impl Scene {
     }
 
     /// Scene.add_frame with the preexisting-color/bold overrides.
-    pub fn add_frame(&mut self, symbol: &str, duration: i64, mut params: VisualParams) -> Result<(), String> {
+    pub fn add_frame(
+        &mut self,
+        symbol: &str,
+        duration: i64,
+        mut params: VisualParams,
+    ) -> Result<(), String> {
         if let Some(pre) = &self.preexisting_colors {
-            params.colors = Some(pre.clone());
+            params.colors = Some(*pre);
         }
         if self.preexisting_bold {
             params.bold = true;
@@ -381,11 +406,17 @@ impl Scene {
             params.bg_color_code = None;
         }
         if duration < 1 {
-            return Err(format!("Frame duration must be at least 1. Received: {duration}"));
+            return Err(format!(
+                "Frame duration must be at least 1. Received: {duration}"
+            ));
         }
         let visual = CharacterVisual::interned(symbol.to_owned(), params);
         let frame_index = self.all_frames.len();
-        self.all_frames.push(Frame { character_visual: visual, duration, ticks_elapsed: 0 });
+        self.all_frames.push(Frame {
+            character_visual: visual,
+            duration,
+            ticks_elapsed: 0,
+        });
         self.frames.push_back(frame_index);
         for _ in 0..duration {
             self.frame_index_map.push(frame_index);
@@ -410,7 +441,8 @@ impl Scene {
         self.all_frames[head].ticks_elapsed += 1;
         if self.all_frames[head].ticks_elapsed == self.all_frames[head].duration {
             self.all_frames[head].ticks_elapsed = 0;
-            self.played_frames.push_back(self.frames.pop_front().unwrap());
+            self.played_frames
+                .push_back(self.frames.pop_front().unwrap());
             if self.is_looping && self.frames.is_empty() {
                 self.frames.append(&mut self.played_frames);
             }
@@ -470,7 +502,9 @@ impl Scene {
         }
         for symbol in symbols {
             if symbol.chars().count() > 1 {
-                return Err(format!("Symbol must be a string with a length of 1. Received: `{symbol}`."));
+                return Err(format!(
+                    "Symbol must be a string with a length of 1. Received: `{symbol}`."
+                ));
             }
         }
         let color_pairs: Vec<ColorPair> = if fg_has && bg_has {
@@ -486,18 +520,42 @@ impl Scene {
                     .collect()
             }
         } else if fg_has {
-            fg_gradient.unwrap().spectrum.iter().map(|c| ColorPair::new(Some(c.clone()), None)).collect()
+            fg_gradient
+                .unwrap()
+                .spectrum
+                .iter()
+                .map(|c| ColorPair::new(Some(*c), None))
+                .collect()
         } else {
-            bg_gradient.unwrap().spectrum.iter().map(|c| ColorPair::new(None, Some(c.clone()))).collect()
+            bg_gradient
+                .unwrap()
+                .spectrum
+                .iter()
+                .map(|c| ColorPair::new(None, Some(*c)))
+                .collect()
         };
 
         if symbols.len() >= color_pairs.len() {
             for (symbol, colors) in cyclic_distribution(symbols, &color_pairs) {
-                self.add_frame(symbol, duration, VisualParams { colors: Some(*colors), ..Default::default() })?;
+                self.add_frame(
+                    symbol,
+                    duration,
+                    VisualParams {
+                        colors: Some(*colors),
+                        ..Default::default()
+                    },
+                )?;
             }
         } else {
             for (colors, symbol) in cyclic_distribution(&color_pairs, symbols) {
-                self.add_frame(symbol, duration, VisualParams { colors: Some(*colors), ..Default::default() })?;
+                self.add_frame(
+                    symbol,
+                    duration,
+                    VisualParams {
+                        colors: Some(*colors),
+                        ..Default::default()
+                    },
+                )?;
             }
         }
         Ok(())
@@ -544,7 +602,10 @@ impl Animation {
             input_bg_color: None,
             input_bold: false,
             active_scene_current_step: 0,
-            current_character_visual: CharacterVisual::interned(input_symbol.to_owned(), VisualParams::default()),
+            current_character_visual: CharacterVisual::interned(
+                input_symbol.to_owned(),
+                VisualParams::default(),
+            ),
         }
     }
 
@@ -576,16 +637,25 @@ impl Animation {
         } else {
             scene_id.to_string()
         };
-        let (preexisting_colors, preexisting_bold) =
-            if self.existing_color_handling == ExistingColorHandling::Always && uses_input_preexisting_colors {
-                (
-                    Some(ColorPair::new(self.input_fg_color.clone(), self.input_bg_color.clone())),
-                    self.input_bold,
-                )
-            } else {
-                (None, false)
-            };
-        let mut scene = Scene::new(&scene_id, is_looping, sync, ease, self.no_color, self.use_xterm_colors);
+        let (preexisting_colors, preexisting_bold) = if self.existing_color_handling
+            == ExistingColorHandling::Always
+            && uses_input_preexisting_colors
+        {
+            (
+                Some(ColorPair::new(self.input_fg_color, self.input_bg_color)),
+                self.input_bold,
+            )
+        } else {
+            (None, false)
+        };
+        let mut scene = Scene::new(
+            &scene_id,
+            is_looping,
+            sync,
+            ease,
+            self.no_color,
+            self.use_xterm_colors,
+        );
         scene.preexisting_colors = preexisting_colors;
         scene.preexisting_bold = preexisting_bold;
         self.scenes.insert(scene_id.clone(), scene);
@@ -614,8 +684,10 @@ impl Animation {
         let symbol = symbol.unwrap_or(input_symbol);
         let mut colors = colors.unwrap_or_default();
         let mut bold = false;
-        if self.existing_color_handling == ExistingColorHandling::Always && uses_input_preexisting_colors {
-            colors = ColorPair::new(self.input_fg_color.clone(), self.input_bg_color.clone());
+        if self.existing_color_handling == ExistingColorHandling::Always
+            && uses_input_preexisting_colors
+        {
+            colors = ColorPair::new(self.input_fg_color, self.input_bg_color);
             bold = self.input_bold;
         }
         let flags = (self.no_color as u8) | (self.use_xterm_colors as u8) << 1 | (bold as u8) << 2;
@@ -634,8 +706,18 @@ impl Animation {
                     return *visual;
                 }
             }
-            let fg_code = resolve_color_code(colors.fg_color.as_ref(), self.no_color, self.use_xterm_colors, None);
-            let bg_code = resolve_color_code(colors.bg_color.as_ref(), self.no_color, self.use_xterm_colors, None);
+            let fg_code = resolve_color_code(
+                colors.fg_color.as_ref(),
+                self.no_color,
+                self.use_xterm_colors,
+                None,
+            );
+            let bg_code = resolve_color_code(
+                colors.bg_color.as_ref(),
+                self.no_color,
+                self.use_xterm_colors,
+                None,
+            );
             let visual = CharacterVisual::interned(
                 symbol.to_owned(),
                 VisualParams {
@@ -670,7 +752,8 @@ impl Animation {
                 return color_intensity;
             }
             if hue_value < 2.0 / 3.0 {
-                return lightness_scaled + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
+                return lightness_scaled
+                    + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
             }
             lightness_scaled
         }
@@ -695,7 +778,12 @@ impl Animation {
                 diff / (max_val + min_val)
             };
             let mut hue_value = if max_val == normalized_red {
-                (normalized_green - normalized_blue) / diff + if normalized_green < normalized_blue { 6.0 } else { 0.0 }
+                (normalized_green - normalized_blue) / diff
+                    + if normalized_green < normalized_blue {
+                        6.0
+                    } else {
+                        0.0
+                    }
             } else if max_val == normalized_green {
                 (normalized_blue - normalized_red) / diff + 2.0
             } else {
@@ -705,7 +793,11 @@ impl Animation {
             (hue_value, saturation)
         };
 
-        lightness = (lightness * brightness).min(1.0).max(0.0);
+        // not clamp(): NaN must come out as 1.0, as it does here
+        #[allow(clippy::manual_clamp)]
+        {
+            lightness = (lightness * brightness).min(1.0).max(0.0);
+        }
 
         let (red, green, blue) = if saturation == 0.0 {
             (lightness, lightness, lightness)

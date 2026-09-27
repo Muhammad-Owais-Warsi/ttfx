@@ -74,7 +74,10 @@ struct Pairs {
 
 impl Pairs {
     fn intern(&mut self, fg: Option<Color>, bg: Option<Color>) -> u32 {
-        let key = (fg.map_or(0, |c| c.color_arg.key()), bg.map_or(0, |c| c.color_arg.key()));
+        let key = (
+            fg.map_or(0, |c| c.color_arg.key()),
+            bg.map_or(0, |c| c.color_arg.key()),
+        );
         *self.index.entry(key).or_insert_with(|| {
             self.pairs.push((fg.map(Hls::of), bg.map(Hls::of)));
             self.colors.push((fg, bg));
@@ -106,10 +109,18 @@ impl Hls {
             (0.0, 0.0)
         } else {
             let diff = max_val - min_val;
-            let saturation =
-                if lightness > 0.5 { diff / (2.0 - max_val - min_val) } else { diff / (max_val + min_val) };
+            let saturation = if lightness > 0.5 {
+                diff / (2.0 - max_val - min_val)
+            } else {
+                diff / (max_val + min_val)
+            };
             let hue = if max_val == normalized_red {
-                (normalized_green - normalized_blue) / diff + if normalized_green < normalized_blue { 6.0 } else { 0.0 }
+                (normalized_green - normalized_blue) / diff
+                    + if normalized_green < normalized_blue {
+                        6.0
+                    } else {
+                        0.0
+                    }
             } else if max_val == normalized_green {
                 (normalized_blue - normalized_red) / diff + 2.0
             } else {
@@ -117,7 +128,11 @@ impl Hls {
             };
             (hue / 6.0, saturation)
         };
-        Hls { hue, saturation, lightness }
+        Hls {
+            hue,
+            saturation,
+            lightness,
+        }
     }
 
     /// The adjusted color as `1 << 24 | rgb` (VisualPool::make_rgb's form).
@@ -137,10 +152,13 @@ impl Hls {
                 return color_intensity;
             }
             if hue_value < 2.0 / 3.0 {
-                return lightness_scaled + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
+                return lightness_scaled
+                    + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
             }
             lightness_scaled
         }
+        // not clamp(): NaN must come out as 1.0, as it does here
+        #[allow(clippy::manual_clamp)]
         let lightness = (self.lightness * brightness).min(1.0).max(0.0);
         let (red, green, blue) = if self.saturation == 0.0 {
             (lightness, lightness, lightness)
@@ -179,14 +197,19 @@ struct Memo<V> {
 
 impl<V: Copy + Default> Memo<V> {
     fn new(bits: u32) -> Self {
-        Memo { entries: vec![MemoEntry::default(); 1 << bits], bits, count: 0 }
+        Memo {
+            entries: vec![MemoEntry::default(); 1 << bits],
+            bits,
+            count: 0,
+        }
     }
 
     /// The value, or Err(the empty entry to pass to `insert`).
     #[inline]
     fn get(&self, narrow: u32, wide: u64) -> Result<V, usize> {
         let narrow = narrow + 1;
-        let h = ((narrow as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ wide).wrapping_mul(0xff51_afd7_ed55_8ccd);
+        let h = ((narrow as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ wide)
+            .wrapping_mul(0xff51_afd7_ed55_8ccd);
         let mask = (1 << self.bits) - 1;
         let mut i = (h >> (64 - self.bits)) as usize;
         loop {
@@ -213,7 +236,11 @@ impl<V: Copy + Default> Memo<V> {
             self.clear();
         } else {
             self.count += 1;
-            *self.entries.at_mut(at) = MemoEntry { wide, narrow: narrow + 1, value };
+            *self.entries.at_mut(at) = MemoEntry {
+                wide,
+                narrow: narrow + 1,
+                value,
+            };
         }
     }
 }
@@ -229,7 +256,9 @@ struct Lit {
 /// A pair of adjusted colors (`Hls::adjust`'s form), fg in the low 25 bits
 /// and bg above, as colors (for checking).
 fn unpack(packed: u64) -> (Option<Color>, Option<Color>) {
-    let one = |v: u64| (v & 1 << 24 != 0).then(|| Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8));
+    let one = |v: u64| {
+        (v & 1 << 24 != 0).then(|| Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+    };
     (one(packed & 0x1ff_ffff), one(packed >> 25))
 }
 
@@ -331,22 +360,48 @@ impl Spotlights {
                 // find_coord_at_minimum_distance
                 targets[i] = loop {
                     let coord = e.canvas.random_coord(&mut e.rng, false, false);
-                    if geometry::find_length_of_line(targets[i - 1], coord, false) >= minimum_distance {
+                    if geometry::find_length_of_line(targets[i - 1], coord, false)
+                        >= minimum_distance
+                    {
                         break coord;
                     }
                 };
             }
             for (i, &target) in targets.iter().enumerate() {
-                let speed = e.rng.uniform(config.search_speed_range.0, config.search_speed_range.1);
-                let path = e.path_new(spotlight, speed, Some(Easing::InOutQuad), None, 0, false, names[i]).map_err(other)?;
+                let speed = e
+                    .rng
+                    .uniform(config.search_speed_range.0, config.search_speed_range.1);
+                let path = e
+                    .path_new(
+                        spotlight,
+                        speed,
+                        Some(Easing::InOutQuad),
+                        None,
+                        0,
+                        false,
+                        names[i],
+                    )
+                    .map_err(other)?;
                 let control = e.canvas.random_coord(&mut e.rng, true, false);
-                e.path_new_waypoint(path, target, Some(&[control]), Name::NONE).map_err(other)?;
+                e.path_new_waypoint(path, target, Some(&[control]), Name::NONE)
+                    .map_err(other)?;
             }
             e.chain_paths(spotlight, &names, true).map_err(other)?;
 
             let center = e.canvas.center;
-            let path = e.path_new(spotlight, 0.5, Some(Easing::InOutSine), None, 0, false, self.center).map_err(other)?;
-            e.path_new_waypoint(path, center, None, Name::NONE).map_err(other)?;
+            let path = e
+                .path_new(
+                    spotlight,
+                    0.5,
+                    Some(Easing::InOutSine),
+                    None,
+                    0,
+                    false,
+                    self.center,
+                )
+                .map_err(other)?;
+            e.path_new_waypoint(path, center, None, Name::NONE)
+                .map_err(other)?;
         }
         Ok(())
     }
@@ -363,7 +418,8 @@ impl Spotlights {
         let b_squared = (range as f64 / 2.0).powf(2.0);
         for dx in 0..=range {
             let x_component = (dx as f64).powf(2.0) / a_squared;
-            self.yoff.push((b_squared * (1.0 - x_component)).powf(0.5) as i64);
+            self.yoff
+                .push((b_squared * (1.0 - x_component)).powf(0.5) as i64);
         }
     }
 
@@ -434,7 +490,10 @@ impl Spotlights {
             Err(at) => at,
         };
         let (fg, bg) = self.pairs.pairs[rec.pair as usize];
-        let (fg, bg) = (fg.map_or(0, |c| c.adjust(factor)), bg.map_or(0, |c| c.adjust(factor)));
+        let (fg, bg) = (
+            fg.map_or(0, |c| c.adjust(factor)),
+            bg.map_or(0, |c| c.adjust(factor)),
+        );
         debug_assert_eq!(unpack(fg as u64 | (bg as u64) << 25), {
             let (fg, bg) = self.pairs.colors[rec.pair as usize];
             let adjust = |c: Color| Animation::adjust_color_brightness(&c, factor);
@@ -457,7 +516,11 @@ impl Spotlights {
         // (spotlights move under a cell a frame) nothing would change
         let same = self.lit_as == Some((range, override_on))
             && self.coords.len() == self.spotlights.len()
-            && self.spotlights.iter().zip(&self.coords).all(|(&s, &c)| e.coord(s) == c);
+            && self
+                .spotlights
+                .iter()
+                .zip(&self.coords)
+                .all(|(&s, &c)| e.coord(s) == c);
         if same {
             return;
         }
@@ -491,7 +554,11 @@ impl Spotlights {
                         continue;
                     }
                     *mark = stamp;
-                    self.next.push(Lit { at, column: x as i32, row: y as i32 });
+                    self.next.push(Lit {
+                        at,
+                        column: x as i32,
+                        row: y as i32,
+                    });
                 }
             }
         }
@@ -505,7 +572,11 @@ impl Spotlights {
                 continue;
             }
             let rec = self.recs.at(at);
-            let visual = if override_on && rec.over.0 != NONE { rec.over } else { rec.dark };
+            let visual = if override_on && rec.over.0 != NONE {
+                rec.over
+            } else {
+                rec.dark
+            };
             e.set_visual(*self.order.at(at), visual);
         }
         std::mem::swap(&mut self.lit, &mut self.next);
@@ -523,17 +594,35 @@ fn other(message: String) -> EngineError {
 /// shows those and its bold instead.
 fn appearance(e: &mut Engine, slot: u32, fg: Option<Color>, bg: Option<Color>) -> Visual {
     let sym = e.input_sym(slot);
-    let info = if e.existing_color_handling() == ExistingColorHandling::Always && e.uses_preexisting_colors(slot) {
+    let info = if e.existing_color_handling() == ExistingColorHandling::Always
+        && e.uses_preexisting_colors(slot)
+    {
         let attrs = HAS_COLORS | if e.input_bold(slot) { BOLD } else { 0 };
-        VisualInfo { sym, fg: e.input_fg(slot), bg: e.input_bg(slot), attrs }
+        VisualInfo {
+            sym,
+            fg: e.input_fg(slot),
+            bg: e.input_bg(slot),
+            attrs,
+        }
     } else {
-        VisualInfo { sym, fg, bg, attrs: HAS_COLORS }
+        VisualInfo {
+            sym,
+            fg,
+            bg,
+            attrs: HAS_COLORS,
+        }
     };
     e.visuals.make(&e.symbols, info)
 }
 
 /// The visual of _adjust_color_pair_brightness(pair, brightness).
-fn adjusted(e: &mut Engine, slot: u32, fg: Option<Color>, bg: Option<Color>, brightness: f64) -> Visual {
+fn adjusted(
+    e: &mut Engine,
+    slot: u32,
+    fg: Option<Color>,
+    bg: Option<Color>,
+    brightness: f64,
+) -> Visual {
     let fg = fg.map(|c| Animation::adjust_color_brightness(&c, brightness));
     let bg = bg.map(|c| Animation::adjust_color_brightness(&c, brightness));
     appearance(e, slot, fg, bg)
@@ -545,8 +634,13 @@ impl Effect for Spotlights {
         self.center = e.name("center");
         self.make_spotlights(e)?;
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -567,7 +661,10 @@ impl Effect for Spotlights {
         // by slot, and the slot by input coordinate a row at a time, first
         let mut recs = vec![EMPTY; e.char_count()];
         let mut by_row = vec![NONE; (self.width * self.height) as usize];
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         let mut brights: HashSet<Visual, FxBuild> = HashSet::default();
         self.lit = Vec::with_capacity(characters.len());
         self.next = Vec::with_capacity(characters.len());
@@ -591,11 +688,23 @@ impl Effect for Spotlights {
             let pair = self.pairs.intern(fg, bg);
             // _get_expand_color_override: (None, bg) for a bg-only character,
             // (None, None) for one without input colors
-            let over = if dynamic && input_fg.is_none() { appearance(e, slot, None, input_bg) } else { Visual(NONE) };
+            let over = if dynamic && input_fg.is_none() {
+                appearance(e, slot, None, input_bg)
+            } else {
+                Visual(NONE)
+            };
             if flags & FIXED == 0 {
                 brights.insert(bright);
             }
-            recs[slot as usize] = Rec { sym: e.input_sym(slot), bright, dark, over, pair, flags, ..EMPTY };
+            recs[slot as usize] = Rec {
+                sym: e.input_sym(slot),
+                bright,
+                dark,
+                over,
+                pair,
+                flags,
+                ..EMPTY
+            };
             if flags & LIT != 0 {
                 by_row[((input.row - 1) * self.width + (input.column - 1)) as usize] = slot;
             }
@@ -625,10 +734,13 @@ impl Effect for Spotlights {
         let smallest = canvas.right.min(canvas.top);
         // int(min(smallest // ratio, smallest)) - float floor division then
         // truncation
-        self.illuminate_range =
-            ((smallest as f64 / config.beam_width_ratio).floor().min(smallest as f64) as i64).max(1);
+        self.illuminate_range = ((smallest as f64 / config.beam_width_ratio)
+            .floor()
+            .min(smallest as f64) as i64)
+            .max(1);
         let largest = canvas.right.max(canvas.top);
-        self.yoff.reserve((largest as f64 / 1.5).max(0.0) as usize + self.illuminate_range as usize + 2);
+        self.yoff
+            .reserve((largest as f64 / 1.5).max(0.0) as usize + self.illuminate_range as usize + 2);
         self.search_duration = config.search_duration;
         self.searching = true;
         self.expanding = false;
@@ -652,7 +764,11 @@ impl Effect for Spotlights {
         self.edge = range * (1.0 - falloff);
         self.falloff_width = range * falloff;
         // edge^2 less a relative 1e-9 (far above hypot's error), or nothing
-        self.core2 = if self.edge > 0.0 { self.edge * self.edge * 0.999_999_999 } else { -1.0 };
+        self.core2 = if self.edge > 0.0 {
+            self.edge * self.edge * 0.999_999_999
+        } else {
+            -1.0
+        };
         self.illuminate(e);
         if self.searching {
             self.search_duration -= 1;
@@ -665,7 +781,11 @@ impl Effect for Spotlights {
                 self.searching = false;
             }
         }
-        if !self.spotlights.iter().any(|&s| e.ch.path[s as usize] != NONE) {
+        if !self
+            .spotlights
+            .iter()
+            .any(|&s| e.ch.path[s as usize] != NONE)
+        {
             self.spotlights.truncate(1);
             self.expanding = true;
             self.illuminate_range += 1;

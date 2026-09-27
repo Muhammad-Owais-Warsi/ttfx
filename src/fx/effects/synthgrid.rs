@@ -99,19 +99,38 @@ impl SynthGrid {
 
     /// GridLine.__init__: each character added at (0, 0) with one frame of
     /// the grid color at its coordinate, activated, layer 2, then moved.
-    fn make_grid_line(&mut self, e: &mut Engine, fixed: i64, vertical: bool, sym: Sym, map: &CoordColorMap) {
+    fn make_grid_line(
+        &mut self,
+        e: &mut Engine,
+        fixed: i64,
+        vertical: bool,
+        sym: Sym,
+        map: &CoordColorMap,
+    ) {
         let canvas = &e.canvas;
         let coords: Vec<Coord> = if vertical {
-            (canvas.bottom..canvas.top).map(|row| Coord::new(fixed, row)).collect()
+            (canvas.bottom..canvas.top)
+                .map(|row| Coord::new(fixed, row))
+                .collect()
         } else {
-            (canvas.left..=canvas.right).map(|column| Coord::new(column, fixed)).collect()
+            (canvas.left..=canvas.right)
+                .map(|column| Coord::new(column, fixed))
+                .collect()
         };
-        let mut line = Line { first: e.char_count() as u32, count: 0, ext: 0, step: if vertical { 1 } else { 3 } };
+        let mut line = Line {
+            first: e.char_count() as u32,
+            count: 0,
+            ext: 0,
+            step: if vertical { 1 } else { 3 },
+        };
         for coord in coords {
             let slot = e.add_character_sym(sym, Coord::new(0, 0));
             let scene = e.scene_new(slot, Name::NONE, false, None, None);
-            let fg = *map.get(&coord).expect("grid gradient mapping missing coord");
-            e.add_frame(scene, sym, 1, Some(ColorPair::new(Some(fg), None)), 0).expect("duration 1");
+            let fg = *map
+                .get(&coord)
+                .expect("grid gradient mapping missing coord");
+            e.add_frame(scene, sym, 1, Some(ColorPair::new(Some(fg), None)), 0)
+                .expect("duration 1");
             e.activate_scene(self, slot, scene);
             e.set_layer(slot, 2);
             e.set_coordinate(slot, coord);
@@ -137,13 +156,29 @@ impl Effect for SynthGrid {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let grid_gradient =
-            Gradient::new(&config.grid_gradient_stops, &config.grid_gradient_steps, false, false).map_err(other)?;
+        let grid_gradient = Gradient::new(
+            &config.grid_gradient_stops,
+            &config.grid_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let grid_map = grid_gradient
-            .build_coordinate_color_mapping(1, canvas.top, 1, canvas.right, config.grid_gradient_direction)
+            .build_coordinate_color_mapping(
+                1,
+                canvas.top,
+                1,
+                canvas.right,
+                config.grid_gradient_direction,
+            )
             .map_err(other)?;
-        let text_gradient =
-            Gradient::new(&config.text_gradient_stops, &config.text_gradient_steps, false, false).map_err(other)?;
+        let text_gradient = Gradient::new(
+            &config.text_gradient_stops,
+            &config.text_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let text_map = text_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -225,21 +260,35 @@ impl Effect for SynthGrid {
         self.tracker = vec![0; self.groups.len()];
 
         // the dissolve scenes, group by group
-        let symbols: Vec<Sym> = config.text_generation_symbols.iter().map(|s| e.sym(s)).collect();
+        let symbols: Vec<Sym> = config
+            .text_generation_symbols
+            .iter()
+            .map(|s| e.sym(s))
+            .collect();
         let colors = spectrum.len();
         let mut memo = vec![Visual(NONE); symbols.len() * colors];
-        let (members, groups) = (std::mem::take(&mut self.members), std::mem::take(&mut self.groups));
+        let (members, groups) = (
+            std::mem::take(&mut self.members),
+            std::mem::take(&mut self.groups),
+        );
         e.scenes.reserve(members.len(), members.len() * 24);
         for (group_number, &(start, count)) in groups.iter().enumerate() {
             for &slot in &members[start as usize..(start + count) as usize] {
                 let scene = e.scene_new(slot, Name::NONE, false, None, None);
                 let frame_count = e.rng.randint(15, 30) as usize;
-                let mut frames = [Frame { visual: Visual(NONE), duration: 2 }; MAX_DISSOLVE];
+                let mut frames = [Frame {
+                    visual: Visual(NONE),
+                    duration: 2,
+                }; MAX_DISSOLVE];
                 let mut visual_of = |e: &mut Engine, symbol: usize, color: usize| {
                     let entry = &mut memo[symbol * colors + color];
                     if entry.0 == NONE {
-                        let info =
-                            VisualInfo { sym: symbols[symbol], fg: Some(spectrum[color]), bg: None, attrs: HAS_COLORS };
+                        let info = VisualInfo {
+                            sym: symbols[symbol],
+                            fg: Some(spectrum[color]),
+                            bg: None,
+                            attrs: HAS_COLORS,
+                        };
                         *entry = e.visuals.make(&e.symbols, info);
                     }
                     *entry
@@ -247,8 +296,13 @@ impl Effect for SynthGrid {
                 if symbols.len() <= 1 << 16 && colors <= 1 << 16 {
                     // the (symbol, color) choices in one batch
                     let mut draws = [0u16; 2 * (MAX_DISSOLVE - 1)];
-                    e.rng.fill_below_pairs(symbols.len() as u64, colors as u64, &mut draws[..2 * frame_count]);
-                    for (frame, pair) in frames[..frame_count].iter_mut().zip(draws.chunks_exact(2)) {
+                    e.rng.fill_below_pairs(
+                        symbols.len() as u64,
+                        colors as u64,
+                        &mut draws[..2 * frame_count],
+                    );
+                    for (frame, pair) in frames[..frame_count].iter_mut().zip(draws.chunks_exact(2))
+                    {
                         frame.visual = visual_of(e, pair[0] as usize, pair[1] as usize);
                     }
                 } else {
@@ -266,13 +320,32 @@ impl Effect for SynthGrid {
                 } else if dynamic {
                     (e.input_fg(slot), e.input_bg(slot))
                 } else if e.symbol(sym) != " " {
-                    (Some(*text_map.get(&e.input_coord(slot)).expect("text gradient mapping")), None)
+                    (
+                        Some(
+                            *text_map
+                                .get(&e.input_coord(slot))
+                                .expect("text gradient mapping"),
+                        ),
+                        None,
+                    )
                 } else {
                     (None, None)
                 };
-                let visual = e.visuals.make(&e.symbols, VisualInfo { sym, fg, bg, attrs: HAS_COLORS });
-                frames[frame_count] = Frame { visual, duration: 1 };
-                e.add_frames_visual(scene, &frames[..=frame_count]).map_err(other)?;
+                let visual = e.visuals.make(
+                    &e.symbols,
+                    VisualInfo {
+                        sym,
+                        fg,
+                        bg,
+                        attrs: HAS_COLORS,
+                    },
+                );
+                frames[frame_count] = Frame {
+                    visual,
+                    duration: 1,
+                };
+                e.add_frames_visual(scene, &frames[..=frame_count])
+                    .map_err(other)?;
                 e.activate_scene(self, slot, scene);
                 let name = e.scene_name(scene);
                 e.register_event(
@@ -293,7 +366,10 @@ impl Effect for SynthGrid {
         self.phase = Phase::GridExpand;
         if self.groups.is_empty() {
             // no groups: every input character is shown and active at once
-            for slot in e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight) {
+            for slot in e.get_characters(
+                CharacterFilter::default(),
+                CharacterSort::TopToBottomLeftToRight,
+            ) {
                 e.set_visible(slot, true);
                 e.active_insert(slot);
             }
@@ -326,7 +402,8 @@ impl Effect for SynthGrid {
             }
             Phase::AddChars => {
                 if self.pending_next < self.pending.len()
-                    && (self.active_groups as f64) < self.groups.len() as f64 * self.config.max_active_blocks
+                    && (self.active_groups as f64)
+                        < self.groups.len() as f64 * self.config.max_active_blocks
                 {
                     let group = *self.pending.at(self.pending_next);
                     self.pending_next += 1;
@@ -338,7 +415,10 @@ impl Effect for SynthGrid {
                     }
                     *self.tracker.at_mut(group) += count as i64;
                 }
-                if self.pending_next == self.pending.len() && e.active_is_empty() && self.active_groups == 0 {
+                if self.pending_next == self.pending.len()
+                    && e.active_is_empty()
+                    && self.active_groups == 0
+                {
                     self.phase = Phase::Collapse;
                 }
             }

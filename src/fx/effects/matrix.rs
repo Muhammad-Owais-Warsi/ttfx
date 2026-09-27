@@ -114,7 +114,9 @@ pub struct Matrix {
 /// the draw is m / 2^53, and m < chance * 2^53 (exact) is m < ceil of it.
 fn threshold(chance: f64) -> u64 {
     // saturating: at 2^53 every draw hits
-    (chance * (1u64 << 53) as f64).ceil().min((1u64 << 53) as f64) as u64
+    (chance * (1u64 << 53) as f64)
+        .ceil()
+        .min((1u64 << 53) as f64) as u64
 }
 
 /// The number of characters, up to `max`, whose two swap draws both miss,
@@ -156,7 +158,10 @@ fn skip_quads_avx2(draws: &[u64], symbol: u64, color: u64, max: usize) -> usize 
     while k + 8 <= max && k + 8 <= pairs {
         // draws k * 2 .. k * 2 + 16 are in the slice
         let v = [0, 1, 2, 3].map(|i| load_si256(draws, k * 2 + i * 4));
-        let any = _mm256_or_si256(_mm256_or_si256(hit(v[0]), hit(v[1])), _mm256_or_si256(hit(v[2]), hit(v[3])));
+        let any = _mm256_or_si256(
+            _mm256_or_si256(hit(v[0]), hit(v[1])),
+            _mm256_or_si256(hit(v[2]), hit(v[3])),
+        );
         if _mm256_testz_si256(any, any) == 0 {
             break;
         }
@@ -167,8 +172,8 @@ fn skip_quads_avx2(draws: &[u64], symbol: u64, color: u64, max: usize) -> usize 
         let (a, b) = (load_si256(draws, k * 2), load_si256(draws, k * 2 + 4));
         let (a, b) = (hit(a), hit(b));
         // bit 2j: character j's symbol draw hits, bit 2j + 1: its color draw
-        let mask =
-            (_mm256_movemask_pd(_mm256_castsi256_pd(a)) | _mm256_movemask_pd(_mm256_castsi256_pd(b)) << 4) as u32;
+        let mask = (_mm256_movemask_pd(_mm256_castsi256_pd(a))
+            | _mm256_movemask_pd(_mm256_castsi256_pd(b)) << 4) as u32;
         let hits = (mask | mask >> 1) & 0x55;
         let misses = (hits | 0x100).trailing_zeros() as usize / 2;
         if misses < 4 || k + 4 >= max {
@@ -227,7 +232,9 @@ impl Matrix {
             e.set_appearance(slot, Some(*self.syms.at(symbol)), Some(colors));
             return;
         }
-        let visual = self.memo.at_mut(symbol as usize * self.pal.len() + color as usize);
+        let visual = self
+            .memo
+            .at_mut(symbol as usize * self.pal.len() + color as usize);
         if visual.0 == NONE {
             let info = VisualInfo {
                 sym: self.syms[symbol as usize],
@@ -281,13 +288,17 @@ impl Matrix {
         col.vstart = 0;
         col.vend = 0;
         col.base_delay = if phase == Phase::Fill {
-            e.rng.randint(floor_div(lo, 3).max(1), floor_div(hi, 3).max(1))
+            e.rng
+                .randint(floor_div(lo, 3).max(1), floor_div(hi, 3).max(1))
         } else {
             e.rng.randint(lo, hi)
         };
         col.delay = 0;
-        col.length =
-            if phase == Phase::Rain { e.rng.randint(1.max((len as f64 * 0.1) as i64), len as i64) } else { len as i64 };
+        col.length = if phase == Phase::Rain {
+            e.rng.randint(1.max((len as f64 * 0.1) as i64), len as i64)
+        } else {
+            len as i64
+        };
         col.hold = 0;
         if col.length == len as i64 {
             col.hold = e.rng.randint(20, 45);
@@ -394,7 +405,8 @@ impl Matrix {
 
         let col = self.columns.at(c);
         if col.vend != col.vstart {
-            self.owed.push((col.start + col.vstart, col.start + col.vend));
+            self.owed
+                .push((col.start + col.vstart, col.start + col.vend));
             self.owed_count += col.visible() as usize;
         }
     }
@@ -410,7 +422,13 @@ impl Matrix {
         let mut segment = 0usize;
         let (mut k, mut end) = *self.owed.at(0usize);
         loop {
-            let mut n = skip_misses(&mut e.rng, symbol_threshold, color_threshold, self.avx2, left);
+            let mut n = skip_misses(
+                &mut e.rng,
+                symbol_threshold,
+                color_threshold,
+                self.avx2,
+                left,
+            );
             left -= n;
             if left == 0 {
                 break;
@@ -444,7 +462,11 @@ impl Matrix {
         } else {
             None
         };
-        let next_color = if e.rng.random() < self.config.color_swap_chance { Some(self.rain_choice(e)) } else { None };
+        let next_color = if e.rng.random() < self.config.color_swap_chance {
+            Some(self.rain_choice(e))
+        } else {
+            None
+        };
         if next_symbol.is_none() && next_color.is_none() {
             return;
         }
@@ -452,10 +474,15 @@ impl Matrix {
         // the color stays (and under --existing-color-handling always the
         // input colors show either way)
         let (symbol, color) = *self.look.at(slot);
-        let changed =
-            next_symbol.is_some_and(|s| s != symbol) || next_color.is_some_and(|c| !self.shows_color(e, slot, c));
+        let changed = next_symbol.is_some_and(|s| s != symbol)
+            || next_color.is_some_and(|c| !self.shows_color(e, slot, c));
         if changed {
-            self.appear(e, slot, next_symbol.unwrap_or(symbol), next_color.unwrap_or(color));
+            self.appear(
+                e,
+                slot,
+                next_symbol.unwrap_or(symbol),
+                next_color.unwrap_or(color),
+            );
         }
     }
 
@@ -484,12 +511,23 @@ fn other(message: String) -> EngineError {
 impl Effect for Matrix {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let rain = Gradient::with_steps(&config.rain_color_gradient, 6, false).map_err(other)?.spectrum;
+        let rain = Gradient::with_steps(&config.rain_color_gradient, 6, false)
+            .map_err(other)?
+            .spectrum;
         let tail = rain.len().saturating_sub(3);
-        let faded: Vec<Color> = rain[tail..].iter().map(|c| Animation::adjust_color_brightness(c, 0.65)).collect();
+        let faded: Vec<Color> = rain[tail..]
+            .iter()
+            .map(|c| Animation::adjust_color_brightness(c, 0.65))
+            .collect();
         self.highlight = distinct(&mut self.pal, config.highlight_color);
-        self.rain = rain.into_iter().map(|c| distinct(&mut self.pal, c)).collect();
-        self.faded = faded.into_iter().map(|c| distinct(&mut self.pal, c)).collect();
+        self.rain = rain
+            .into_iter()
+            .map(|c| distinct(&mut self.pal, c))
+            .collect();
+        self.faded = faded
+            .into_iter()
+            .map(|c| distinct(&mut self.pal, c))
+            .collect();
         for symbol in &config.rain_symbols {
             let sym = e.sym(symbol);
             self.symbols.push(distinct(&mut self.syms, sym));
@@ -500,8 +538,13 @@ impl Effect for Matrix {
         self.symbol_threshold = threshold(config.symbol_swap_chance);
         self.color_threshold = threshold(config.color_swap_chance);
 
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -522,7 +565,10 @@ impl Effect for Matrix {
         // symbol, final color) -> a plain scene's frames
         let mut spectra: HashMap<Color, Vec<Color>, FxBuild> = HashMap::default();
         let mut memo: HashMap<(Sym, Color), Vec<Frame>, FxBuild> = HashMap::default();
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             let sym = e.input_sym(slot);
             let scene = e.scene_new(slot, resolve, false, None, None);
@@ -536,9 +582,11 @@ impl Effect for Matrix {
                 let fg = spectrum(e.input_fg(slot))?;
                 let bg = spectrum(e.input_bg(slot))?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(scene, &[sym], frames, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], frames, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(scene, sym, frames, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(scene, sym, frames, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
                 let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).unwrap();
@@ -549,12 +597,20 @@ impl Effect for Matrix {
                         let spectrum = match spectra.entry(final_fg) {
                             Entry::Occupied(entry) => entry.into_mut(),
                             Entry::Vacant(entry) => entry.insert(
-                                Gradient::with_steps(&[highlight, final_fg], 8, false).map_err(other)?.spectrum,
+                                Gradient::with_steps(&[highlight, final_fg], 8, false)
+                                    .map_err(other)?
+                                    .spectrum,
                             ),
                         };
                         for &color in spectrum.iter() {
-                            e.add_frame(scene, sym, frames, Some(ColorPair::new(Some(color), None)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                scene,
+                                sym,
+                                frames,
+                                Some(ColorPair::new(Some(color), None)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
                         if plain {
                             memo.insert((sym, final_fg), e.scenes.frames_of(scene).to_vec());
@@ -565,8 +621,12 @@ impl Effect for Matrix {
         }
 
         // one RainColumn per canvas column, left to right, bottom to top
-        let all_chars_filter =
-            CharacterFilter { input_chars: true, inner_fill_chars: true, outer_fill_chars: true, added_chars: false };
+        let all_chars_filter = CharacterFilter {
+            input_chars: true,
+            inner_fill_chars: true,
+            outer_fill_chars: true,
+            added_chars: false,
+        };
         let groups = e.get_characters_grouped(all_chars_filter, CharacterGroup::ColumnLeftToRight);
         self.columns.reserve(groups.len());
         for group in groups {

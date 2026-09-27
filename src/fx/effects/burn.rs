@@ -94,7 +94,14 @@ impl Burn {
         if e.rng.random() > self.config.smoke_chance {
             return;
         }
-        let Burn { pool, first_particle, smoke_scene, reclaim_registered, smoke_name, .. } = self;
+        let Burn {
+            pool,
+            first_particle,
+            smoke_scene,
+            reclaim_registered,
+            smoke_name,
+            ..
+        } = self;
         let (first_particle, smoke_name) = (*first_particle, *smoke_name);
         // the pool never grows past its preallocation, so the initializer
         // cannot run
@@ -109,9 +116,15 @@ impl Burn {
                 // on_emit_smoke
                 let k = (particle - first_particle) as usize;
                 e.scene_reset(smoke_scene[k]);
-                let path = e.path_new(particle, 0.5, None, None, 0, false, Name::NONE).expect("smoke path");
-                let rise_target = Coord::new(e.rng.randint(origin.column - 4, origin.column + 4), e.canvas.top + 1);
-                e.path_new_waypoint(path, rise_target, None, Name::NONE).expect("smoke waypoint");
+                let path = e
+                    .path_new(particle, 0.5, None, None, 0, false, Name::NONE)
+                    .expect("smoke path");
+                let rise_target = Coord::new(
+                    e.rng.randint(origin.column - 4, origin.column + 4),
+                    e.canvas.top + 1,
+                );
+                e.path_new_waypoint(path, rise_target, None, Name::NONE)
+                    .expect("smoke waypoint");
                 e.activate_path(&mut NoHooks, particle, path);
                 e.activate_scene(&mut NoHooks, particle, smoke_scene[k]);
                 // ParticlePool.reclaim_on_event(next_particle, caller="smoke")
@@ -155,7 +168,10 @@ fn unlinked_neighbors(e: &Engine, linked: &[bool], slot: u32, out: &mut [u32; 4]
     let canvas = &e.canvas;
     let mut count = 0;
     for neighbor in [n.north, n.east, n.south, n.west] {
-        if neighbor != NONE && canvas.coord_is_in_text(e.input_coord(neighbor)) && !linked[neighbor as usize] {
+        if neighbor != NONE
+            && canvas.coord_is_in_text(e.input_coord(neighbor))
+            && !linked[neighbor as usize]
+        {
             out[count] = neighbor;
             count += 1;
         }
@@ -204,11 +220,18 @@ impl Effect for Burn {
         let smoke_name = e.name("smoke");
         self.smoke_name = smoke_name;
         let smoke_symbols: Vec<Sym> = SMOKE_SYMBOLS.iter().map(|s| e.sym(s)).collect();
-        let smoke_spectrum =
-            Gradient::with_steps(&[Color::from_hex("504F4F").unwrap(), Color::from_hex("C7C7C7").unwrap()], 9, false)
-                .map_err(other)?
-                .spectrum;
-        let mut pool = ParticlePool::new(smoke_symbols, Some(SMOKE_PARTICLES), None).map_err(other)?;
+        let smoke_spectrum = Gradient::with_steps(
+            &[
+                Color::from_hex("504F4F").unwrap(),
+                Color::from_hex("C7C7C7").unwrap(),
+            ],
+            9,
+            false,
+        )
+        .map_err(other)?
+        .spectrum;
+        let mut pool =
+            ParticlePool::new(smoke_symbols, Some(SMOKE_PARTICLES), None).map_err(other)?;
         self.first_particle = e.char_count() as u32;
         let mut smoke_scene = Vec::with_capacity(SMOKE_PARTICLES);
         // (symbol, scene) of the first particle with each symbol
@@ -221,7 +244,8 @@ impl Effect for Burn {
                 None => {
                     let scene = e.scene_new(particle, smoke_name, false, None, None);
                     for &color in &smoke_spectrum {
-                        e.add_frame(scene, sym, 10, Some(ColorPair::new(Some(color), None)), 0).expect("smoke frame");
+                        e.add_frame(scene, sym, 10, Some(ColorPair::new(Some(color), None)), 0)
+                            .expect("smoke frame");
                     }
                     templates.push((sym, scene));
                     scene
@@ -237,8 +261,13 @@ impl Effect for Burn {
 
         // build()
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -248,7 +277,9 @@ impl Effect for Burn {
                 config.final_gradient_direction,
             )
             .map_err(other)?;
-        let fire = Gradient::with_steps(&config.burn_colors, 10, false).map_err(other)?.spectrum;
+        let fire = Gradient::with_steps(&config.burn_colors, 10, false)
+            .map_err(other)?
+            .spectrum;
         let fire_last = *fire.last().expect("fire gradient spectrum");
 
         self.order = prims_simple(e, start);
@@ -260,14 +291,19 @@ impl Effect for Burn {
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         let always = e.existing_color_handling() == ExistingColorHandling::Always;
         let pair = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[fire_last, c], 8, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[fire_last, c], 8, false)
+                .map_err(other)?
+                .spectrum)
         };
         let starting = Some(ColorPair::new(Some(config.starting_color), None));
         let mut burn_template = NONE;
         // (symbol, final color) -> the frames of a plain final scene
         let mut memo: HashMap<(Sym, Color), Vec<Frame>, FxBuild> = HashMap::default();
         self.burn_scene = vec![NONE; e.char_count()];
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             e.set_visible(slot, true);
             let sym = e.input_sym(slot);
@@ -277,7 +313,8 @@ impl Effect for Burn {
                 e.scene_copy(slot, burn_template, burn_name)
             } else {
                 let scene = e.scene_new(slot, burn_name, false, None, None);
-                e.apply_gradient(scene, &burn_syms, 4, Some(&fire), None).map_err(other)?;
+                e.apply_gradient(scene, &burn_syms, 4, Some(&fire), None)
+                    .map_err(other)?;
                 if plain {
                     burn_template = scene;
                 }
@@ -290,30 +327,53 @@ impl Effect for Burn {
                 let fg = e.input_fg(slot).map(pair).transpose()?;
                 let bg = e.input_bg(slot).map(pair).transpose()?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(final_scene, &[sym], 4, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(final_scene, &[sym], 4, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(final_scene, sym, 4, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(final_scene, sym, 4, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
-                let final_color = *final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping");
+                let final_color = *final_gradient_mapping
+                    .get(&e.input_coord(slot))
+                    .expect("gradient mapping");
                 match memo.get(&(sym, final_color)) {
                     Some(frames) if plain => e.append_frames(final_scene, frames),
                     _ => {
                         for color in pair(final_color)? {
-                            e.add_frame(final_scene, sym, 4, Some(ColorPair::new(Some(color), None)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                final_scene,
+                                sym,
+                                4,
+                                Some(ColorPair::new(Some(color), None)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
                         if plain {
-                            memo.insert((sym, final_color), e.scenes.frames_of(final_scene).to_vec());
+                            memo.insert(
+                                (sym, final_color),
+                                e.scenes.frames_of(final_scene).to_vec(),
+                            );
                         }
                     }
                 }
             }
             let final_name = e.scene_name(final_scene);
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(burn_name), Action::ActivateScene(final_name))
-                .map_err(other)?;
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(burn_name), Action::Callback(CB_EMIT_SMOKE, 0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(burn_name),
+                Action::ActivateScene(final_name),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(burn_name),
+                Action::Callback(CB_EMIT_SMOKE, 0),
+            )
+            .map_err(other)?;
         }
         Ok(())
     }

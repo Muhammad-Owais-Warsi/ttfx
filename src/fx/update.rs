@@ -118,7 +118,12 @@ fn wake_mask_neon(bytes: &[u8; 64], value: u8) -> u64 {
     use crate::utils::simd::{bits_u8x64, load_u8x64};
     use std::arch::aarch64::*;
     let (v, q) = (vdupq_n_u8(value), load_u8x64(bytes, 0));
-    bits_u8x64(uint8x16x4_t(vceqq_u8(q.0, v), vceqq_u8(q.1, v), vceqq_u8(q.2, v), vceqq_u8(q.3, v)))
+    bits_u8x64(uint8x16x4_t(
+        vceqq_u8(q.0, v),
+        vceqq_u8(q.1, v),
+        vceqq_u8(q.2, v),
+        vceqq_u8(q.3, v),
+    ))
 }
 
 impl Engine {
@@ -165,11 +170,17 @@ impl Engine {
 
     pub fn active_is_empty(&self) -> bool {
         let a = &self.active;
-        a.bits[a.lo as usize..a.hi.max(a.lo) as usize].iter().all(|&w| w == 0)
+        a.bits[a.lo as usize..a.hi.max(a.lo) as usize]
+            .iter()
+            .all(|&w| w == 0)
     }
 
     pub fn active_count(&self) -> usize {
-        self.active.bits.iter().map(|w| w.count_ones() as usize).sum()
+        self.active
+            .bits
+            .iter()
+            .map(|w| w.count_ones() as usize)
+            .sum()
     }
 
     /// The active characters in ascending slot order.
@@ -273,7 +284,11 @@ impl Engine {
     /// ascending order, then prune.
     pub fn update(&mut self, hooks: &mut dyn Hooks) {
         let (on, timed) = self.batch.plan();
-        let start = if timed { Some(std::time::Instant::now()) } else { None };
+        let start = if timed {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         if on {
             self.update_with::<true>(hooks);
         } else {
@@ -312,8 +327,16 @@ impl Engine {
             }
             let epoch = self.motion_epoch;
             let mirrored = word & *self.paths.m.bits.at(w);
-            let batched = if BATCH && mirrored != 0 { self.motion_batch(w, mirrored) } else { 0 };
-            let (idle, bare) = if BATCH && mirrored != 0 { (self.batch.idle, self.batch.bare) } else { (0, 0) };
+            let batched = if BATCH && mirrored != 0 {
+                self.motion_batch(w, mirrored)
+            } else {
+                0
+            };
+            let (idle, bare) = if BATCH && mirrored != 0 {
+                (self.batch.idle, self.batch.bare)
+            } else {
+                (0, 0)
+            };
             self.batch.live = batched;
             *self.active.snapshot.at_mut(w) &= !idle;
             loop {
@@ -423,11 +446,16 @@ mod tests {
         for _ in 0..10_000 {
             let mut bytes = [0u8; 64];
             for b in &mut bytes {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 *b = (x >> 61) as u8;
             }
             let value = (x >> 40) as u8 & 7;
-            let want = bytes.iter().enumerate().fold(0u64, |m, (i, &b)| m | ((b == value) as u64) << i);
+            let want = bytes
+                .iter()
+                .enumerate()
+                .fold(0u64, |m, (i, &b)| m | ((b == value) as u64) << i);
             assert_eq!(wake_mask(&bytes, value), want);
         }
     }

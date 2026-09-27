@@ -97,7 +97,12 @@ impl Scene {
 /// remaining (final_frame_index + 1), bit 31 for a step-synced scene.
 #[inline(always)]
 pub(super) fn sync_key(rec: &Scene) -> u32 {
-    rec.remaining() | if rec.flags & SCF_SYNC_STEP != 0 { SYNC_KEY_STEP } else { 0 }
+    rec.remaining()
+        | if rec.flags & SCF_SYNC_STEP != 0 {
+            SYNC_KEY_STEP
+        } else {
+            0
+        }
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +248,8 @@ impl Scenes {
     /// draws its indices from its own chunks of consecutive records:
     /// neighboring characters' active scenes then share cache lines.
     fn alloc(&mut self, name: Name, hot: Scene, cold: SceneCold) -> SceneId {
-        let bank = (name.0.wrapping_mul(0x9E37_79B1) >> (32 - SCENE_BANKS.trailing_zeros())) as usize;
+        let bank =
+            (name.0.wrapping_mul(0x9E37_79B1) >> (32 - SCENE_BANKS.trailing_zeros())) as usize;
         let (next, end) = &mut self.banks[bank];
         if *next == *end {
             *next = self.recs.len() as u32;
@@ -275,7 +281,11 @@ impl Scenes {
             s.head_visual = f.visual;
             s.head_duration = f.duration;
             // the next cache line of frames, which the head reaches soon
-            prefetch(self.frames.as_ptr().wrapping_add(at as usize + 64 / size_of::<Frame>()));
+            prefetch(
+                self.frames
+                    .as_ptr()
+                    .wrapping_add(at as usize + 64 / size_of::<Frame>()),
+            );
         }
     }
 }
@@ -366,13 +376,17 @@ impl Engine {
             None => NONE,
         };
         let mut pre = NONE;
-        if self.config.existing_color_handling == ExistingColorHandling::Always && self.uses_preexisting_colors(slot) {
+        if self.config.existing_color_handling == ExistingColorHandling::Always
+            && self.uses_preexisting_colors(slot)
+        {
             flags |= SCF_PREEXISTING;
             if self.input_bold(slot) {
                 flags |= SCF_PRE_BOLD;
             }
             pre = self.scenes.pre.len() as u32;
-            self.scenes.pre.push((self.input_fg(slot), self.input_bg(slot)));
+            self.scenes
+                .pre
+                .push((self.input_fg(slot), self.input_bg(slot)));
         }
         let hot = Scene {
             start: self.scenes.frames.len() as u32,
@@ -438,7 +452,9 @@ impl Engine {
             attrs |= BOLD;
         }
         if duration < 1 {
-            return Err(format!("Frame duration must be at least 1. Received: {duration}"));
+            return Err(format!(
+                "Frame duration must be at least 1. Received: {duration}"
+            ));
         }
         let (fg, bg) = match colors {
             Some(pair) => {
@@ -447,24 +463,51 @@ impl Engine {
             }
             None => (None, None),
         };
-        let visual = self.visuals.make(&self.symbols, VisualInfo { sym, fg, bg, attrs });
-        self.scenes.push_frame(scene, Frame { visual, duration: duration as u32 });
+        let visual = self
+            .visuals
+            .make(&self.symbols, VisualInfo { sym, fg, bg, attrs });
+        self.scenes.push_frame(
+            scene,
+            Frame {
+                visual,
+                duration: duration as u32,
+            },
+        );
         Ok(())
     }
 
     /// add_frame with a visual the effect built itself; under preexisting
     /// colors it is rebuilt with them, exactly as add_frame would.
     #[inline]
-    pub fn add_frame_visual(&mut self, scene: SceneId, visual: Visual, duration: i64) -> Result<(), String> {
+    pub fn add_frame_visual(
+        &mut self,
+        scene: SceneId,
+        visual: Visual,
+        duration: i64,
+    ) -> Result<(), String> {
         let flags = self.scenes.recs[scene as usize].flags;
         if flags & (SCF_PREEXISTING | SCF_PRE_BOLD) != 0 {
             let info = self.visuals.info(visual);
-            return self.add_frame(scene, info.sym, duration, info.colors(), info.attrs & !HAS_COLORS);
+            return self.add_frame(
+                scene,
+                info.sym,
+                duration,
+                info.colors(),
+                info.attrs & !HAS_COLORS,
+            );
         }
         if duration < 1 {
-            return Err(format!("Frame duration must be at least 1. Received: {duration}"));
+            return Err(format!(
+                "Frame duration must be at least 1. Received: {duration}"
+            ));
         }
-        self.scenes.push_frame(scene, Frame { visual, duration: duration as u32 });
+        self.scenes.push_frame(
+            scene,
+            Frame {
+                visual,
+                duration: duration as u32,
+            },
+        );
         Ok(())
     }
 
@@ -524,20 +567,32 @@ impl Engine {
         for &sym in symbols {
             let symbol = self.symbols.get(sym);
             if symbol.chars().count() > 1 {
-                return Err(format!("Symbol must be a string with a length of 1. Received: `{symbol}`."));
+                return Err(format!(
+                    "Symbol must be a string with a length of 1. Received: `{symbol}`."
+                ));
             }
         }
         let pairs: Vec<ColorPair> = if fg_has && bg_has {
             let (fg, bg) = (fg.unwrap(), bg.unwrap());
             if fg.len() >= bg.len() {
-                cyclic_distribution(fg.len(), bg.len()).map(|(f, b)| ColorPair::new(Some(fg[f]), Some(bg[b]))).collect()
+                cyclic_distribution(fg.len(), bg.len())
+                    .map(|(f, b)| ColorPair::new(Some(fg[f]), Some(bg[b])))
+                    .collect()
             } else {
-                cyclic_distribution(bg.len(), fg.len()).map(|(b, f)| ColorPair::new(Some(fg[f]), Some(bg[b]))).collect()
+                cyclic_distribution(bg.len(), fg.len())
+                    .map(|(b, f)| ColorPair::new(Some(fg[f]), Some(bg[b])))
+                    .collect()
             }
         } else if fg_has {
-            fg.unwrap().iter().map(|&c| ColorPair::new(Some(c), None)).collect()
+            fg.unwrap()
+                .iter()
+                .map(|&c| ColorPair::new(Some(c), None))
+                .collect()
         } else {
-            bg.unwrap().iter().map(|&c| ColorPair::new(None, Some(c))).collect()
+            bg.unwrap()
+                .iter()
+                .map(|&c| ColorPair::new(None, Some(c)))
+                .collect()
         };
         if symbols.len() >= pairs.len() {
             for (s, p) in cyclic_distribution(symbols.len(), pairs.len()) {
@@ -588,7 +643,12 @@ impl Engine {
         if rec.flags & SCF_EASED == 0 {
             rec.flags |= SCF_EASED;
             rec.ticks = 0;
-            let total = self.scenes.frames_of(scene).iter().map(|f| f.duration).sum();
+            let total = self
+                .scenes
+                .frames_of(scene)
+                .iter()
+                .map(|f| f.duration)
+                .sum();
             self.scenes.cold[scene as usize].ease_total = total;
         }
         self.scenes.recs[scene as usize].flags &= !SCF_SHAPE;
@@ -615,7 +675,9 @@ impl Engine {
     }
 
     pub fn activate_scene_name(&mut self, hooks: &mut dyn Hooks, slot: u32, name: Name) {
-        let scene = self.scene_find(slot, name).expect("activate_scene: scene not found");
+        let scene = self
+            .scene_find(slot, name)
+            .expect("activate_scene: scene not found");
         self.activate_scene(hooks, slot, scene);
     }
 
@@ -655,7 +717,12 @@ impl Engine {
     /// step_animation for a character known not to be dozing. `may_doze`:
     /// update's own tick, which may doze through the pure ticks ahead.
     #[inline(always)]
-    pub(crate) fn step_animation_awake(&mut self, hooks: &mut dyn Hooks, slot: u32, may_doze: bool) {
+    pub(crate) fn step_animation_awake(
+        &mut self,
+        hooks: &mut dyn Hooks,
+        slot: u32,
+        may_doze: bool,
+    ) {
         let scene = *self.ch.scene.at(slot);
         if scene == NONE || self.scenes.recs.at(scene).is_drained() {
             return;
@@ -765,8 +832,9 @@ impl Engine {
                     let reached = (total - remaining).max(1.0);
                     reached / total
                 };
-                frame_index =
-                    round_half_even(final_frame_index as f64 * progress_ratio).min(final_frame_index).max(0) as u32;
+                frame_index = round_half_even(final_frame_index as f64 * progress_ratio)
+                    .min(final_frame_index)
+                    .max(0) as u32;
                 // a mirrored path: the batch works out the next steps' index
                 let m = &mut self.paths.m;
                 if *m.path.at(slot) == path && *m.sync.at(slot) != key {
@@ -816,7 +884,11 @@ impl Engine {
         let (visual, total) = if shape != NONE {
             let sh = self.scenes.shapes.at(shape);
             let total = sh.total;
-            let mut visual = if same { *sh.visual.at(step) } else { Visual(NONE) };
+            let mut visual = if same {
+                *sh.visual.at(step)
+            } else {
+                Visual(NONE)
+            };
             if visual.0 == NONE {
                 let mut index = *sh.index.at(step);
                 if index == NONE {
@@ -831,7 +903,10 @@ impl Engine {
             (visual, total)
         } else {
             let index = self.scenes.ease_index(scene, step);
-            (self.scenes.frame_at_tick(scene, index), self.scenes.cold.at(scene).ease_total)
+            (
+                self.scenes.frame_at_tick(scene, index),
+                self.scenes.cold.at(scene).ease_total,
+            )
         };
         self.set_visual(slot, visual);
         let step = step + 1;
@@ -858,12 +933,18 @@ impl Engine {
         let sh = self.scenes.shapes.at(shape);
         let from = step as usize;
         let k = if same {
-            sh.visual[from..from + n].iter().take_while(|&&v| v == visual).count()
+            sh.visual[from..from + n]
+                .iter()
+                .take_while(|&&v| v == visual)
+                .count()
         } else {
             let cold = self.scenes.cold.at(scene);
             let start = cold.cursor_start;
             let duration = self.scenes.frames.at(rec.start + cold.cursor).duration;
-            sh.index[from..from + n].iter().take_while(|&&i| i != NONE && i.wrapping_sub(start) < duration).count()
+            sh.index[from..from + n]
+                .iter()
+                .take_while(|&&i| i != NONE && i.wrapping_sub(start) < duration)
+                .count()
         };
         if k > 0 {
             let k = self.doze_try(slot, k as u32);
@@ -880,14 +961,23 @@ impl Engine {
         let sym = sym.unwrap_or(self.ch.sym[slot as usize]);
         let mut colors = colors.unwrap_or_default();
         let mut attrs = HAS_COLORS;
-        if self.config.existing_color_handling == ExistingColorHandling::Always && self.uses_preexisting_colors(slot) {
+        if self.config.existing_color_handling == ExistingColorHandling::Always
+            && self.uses_preexisting_colors(slot)
+        {
             colors = ColorPair::new(self.input_fg(slot), self.input_bg(slot));
             if self.input_bold(slot) {
                 attrs |= BOLD;
             }
         }
-        let visual =
-            self.visuals.make(&self.symbols, VisualInfo { sym, fg: colors.fg_color, bg: colors.bg_color, attrs });
+        let visual = self.visuals.make(
+            &self.symbols,
+            VisualInfo {
+                sym,
+                fg: colors.fg_color,
+                bg: colors.bg_color,
+                attrs,
+            },
+        );
         self.doze_wake(slot);
         self.set_visual(slot, visual);
     }
@@ -987,7 +1077,10 @@ impl Scenes {
         } {
             Some(self.shape_last)
         } else {
-            self.shapes.iter().position(|sh| sh.ease == ease && sh.total == total).map(|i| i as u32)
+            self.shapes
+                .iter()
+                .position(|sh| sh.ease == ease && sh.total == total)
+                .map(|i| i as u32)
         };
         let shape = match found {
             Some(shape) => shape,
@@ -1008,7 +1101,8 @@ impl Scenes {
             }
         };
         self.shape_last = shape;
-        let mut flags = self.recs[scene as usize].flags & !SCF_SHAPE | (shape + 1) << SCF_SHAPE_TAG_SHIFT;
+        let mut flags =
+            self.recs[scene as usize].flags & !SCF_SHAPE | (shape + 1) << SCF_SHAPE_TAG_SHIFT;
         if self.frames_of(scene) == self.shapes[shape as usize].reference.as_slice() {
             flags |= SCF_SHAPE_SAME;
         }
@@ -1033,7 +1127,9 @@ impl Scenes {
         let ease = *self.eases.at(cold.ease);
         let easing_factor = ease.ease(step as f64 / cold.ease_total as f64);
         let final_frame_index = (cold.ease_total as i64 - 1).max(0);
-        let index = round_half_even(easing_factor * final_frame_index as f64).min(final_frame_index).max(0) as u32;
+        let index = round_half_even(easing_factor * final_frame_index as f64)
+            .min(final_frame_index)
+            .max(0) as u32;
         if fits {
             *self.ease_memo.at_mut(slot) = (key, index);
         }

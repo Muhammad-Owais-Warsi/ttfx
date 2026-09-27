@@ -35,7 +35,12 @@ pub struct Rain {
 
 impl Rain {
     pub fn new(config: RainConfig) -> Self {
-        Rain { config, chars: Vec::new(), group_end: 0, pending: Vec::new() }
+        Rain {
+            config,
+            chars: Vec::new(),
+            group_end: 0,
+            pending: Vec::new(),
+        }
     }
 }
 
@@ -48,8 +53,13 @@ fn other(message: String) -> EngineError {
 impl Effect for Rain {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let canvas_top = canvas.top;
         let final_gradient_mapping = final_gradient
@@ -73,7 +83,10 @@ impl Effect for Rain {
         let rain = Name::auto(0);
         let fade = Name::auto(1);
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         e.scenes.reserve(characters.len() * 2, characters.len() * 9);
         for &slot in &characters {
             let input = e.input_coord(slot);
@@ -84,33 +97,49 @@ impl Effect for Rain {
             let symbol = e.rng.choice_index(symbol_count);
             let entry = drop_memo.at_mut(color * symbol_count + symbol);
             if entry.0 == NONE {
-                let info = VisualInfo { sym: symbols[symbol], fg: Some(raindrop_color), bg: None, attrs: HAS_COLORS };
+                let info = VisualInfo {
+                    sym: symbols[symbol],
+                    fg: Some(raindrop_color),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                };
                 *entry = e.visuals.make(&e.symbols, info);
             }
             e.add_frame_visual(rain_scene, *entry, 1).map_err(other)?;
             let fade_scene = e.scene_new(slot, fade, false, None, None);
             if dynamic {
                 let spectrum = |c: Option<_>| -> Result<Option<Vec<_>>, EngineError> {
-                    c.map(|c| Gradient::with_steps(&[raindrop_color, c], 7, false).map(|g| g.spectrum))
-                        .transpose()
-                        .map_err(other)
+                    c.map(|c| {
+                        Gradient::with_steps(&[raindrop_color, c], 7, false).map(|g| g.spectrum)
+                    })
+                    .transpose()
+                    .map_err(other)
                 };
                 let fg = spectrum(e.input_fg(slot))?;
                 let bg = spectrum(e.input_bg(slot))?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(fade_scene, &[sym], 3, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(fade_scene, &[sym], 3, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(fade_scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(fade_scene, sym, 3, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
-                let final_fg = *final_gradient_mapping.get(&input).expect("gradient mapping fg");
+                let final_fg = *final_gradient_mapping
+                    .get(&input)
+                    .expect("gradient mapping fg");
                 let plain = e.scene(fade_scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                 let key = (sym, color as u32, final_fg);
                 match fade_memo.get(&key) {
-                    Some(range) if plain => e.append_frames(fade_scene, &fade_frames[range.clone()]),
+                    Some(range) if plain => {
+                        e.append_frames(fade_scene, &fade_frames[range.clone()])
+                    }
                     _ => {
-                        let spectrum = Gradient::with_steps(&[raindrop_color, final_fg], 7, false).map_err(other)?.spectrum;
-                        e.apply_gradient(fade_scene, &[sym], 3, Some(&spectrum), None).map_err(other)?;
+                        let spectrum = Gradient::with_steps(&[raindrop_color, final_fg], 7, false)
+                            .map_err(other)?
+                            .spectrum;
+                        e.apply_gradient(fade_scene, &[sym], 3, Some(&spectrum), None)
+                            .map_err(other)?;
                         if plain {
                             let start = fade_frames.len();
                             fade_frames.extend_from_slice(e.scenes.frames_of(fade_scene));
@@ -120,15 +149,31 @@ impl Effect for Rain {
                 }
             }
             e.activate_scene(self, slot, rain_scene);
-            let speed = e.rng.uniform(config.movement_speed.0, config.movement_speed.1);
+            let speed = e
+                .rng
+                .uniform(config.movement_speed.0, config.movement_speed.1);
             e.set_coordinate(slot, Coord::new(input.column, canvas_top));
             let path = e
-                .path_new(slot, speed, Some(config.movement_easing), None, 0, false, Name::NONE)
+                .path_new(
+                    slot,
+                    speed,
+                    Some(config.movement_easing),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, input, None, Name::NONE)
+                .map_err(other)?;
             let path_name = e.paths.recs[path as usize].name;
-            e.register_event(slot, Event::PathComplete, Caller::Path(path_name), Action::ActivateScene(fade))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(path_name),
+                Action::ActivateScene(fade),
+            )
+            .map_err(other)?;
             e.activate_path(self, slot, path);
         }
         self.group_end = characters.len();

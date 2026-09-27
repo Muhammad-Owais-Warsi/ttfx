@@ -105,7 +105,10 @@ fn main() -> ExitCode {
         }
         let name = names[rng.choice_index(names.len())].clone();
         chosen_effect = match clap::Parser::try_parse_from::<_, &str>(["ttfx", &name]) {
-            Ok(cli::Cli { effect: Some(effect), .. }) => effect,
+            Ok(cli::Cli {
+                effect: Some(effect),
+                ..
+            }) => effect,
             _ => {
                 ttfx::errln!("Error: failed to build effect '{name}'.");
                 return ExitCode::from(1);
@@ -212,22 +215,18 @@ fn main() -> ExitCode {
                 None => {}
             }
         }
-        let mut ctx = match ttfx::engine::ctx::EngineCtx::new(
-            &input_data,
-            config.clone(),
-            rng,
-            clock,
-        ) {
-            Ok(ctx) => ctx,
-            Err(engine::error::EngineError::UnsupportedAnsiSequence(seq)) => {
-                ttfx::errln!("Error: Unsupported ANSI sequence in input data: {seq:?}");
-                return ExitCode::from(1);
-            }
-            Err(e) => {
-                ttfx::errln!("Error: {e}");
-                return ExitCode::from(1);
-            }
-        };
+        let mut ctx =
+            match ttfx::engine::ctx::EngineCtx::new(&input_data, config.clone(), rng, clock) {
+                Ok(ctx) => ctx,
+                Err(engine::error::EngineError::UnsupportedAnsiSequence(seq)) => {
+                    ttfx::errln!("Error: Unsupported ANSI sequence in input data: {seq:?}");
+                    return ExitCode::from(1);
+                }
+                Err(e) => {
+                    ttfx::errln!("Error: {e}");
+                    return ExitCode::from(1);
+                }
+            };
         let mut effect = effect_command.build_effect();
 
         let outcome = if cli.parity_dump {
@@ -287,7 +286,11 @@ fn m0_dump(input_data: &str, cli: &cli::Cli) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let ids: Vec<_> = terminal.character_by_input_coord.values().copied().collect();
+    let ids: Vec<_> = terminal
+        .character_by_input_coord
+        .values()
+        .copied()
+        .collect();
     for id in ids {
         terminal.set_character_visibility(id, true);
     }

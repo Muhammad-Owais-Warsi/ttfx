@@ -78,7 +78,11 @@ fn cpus() -> usize {
 }
 
 /// engine::effect::run_effect on the fx engine.
-pub fn run_effect(effect: &mut dyn Effect, e: &mut Engine, tty_output: bool) -> Result<RunOutcome, EngineError> {
+pub fn run_effect(
+    effect: &mut dyn Effect,
+    e: &mut Engine,
+    tty_output: bool,
+) -> Result<RunOutcome, EngineError> {
     effect.build(e)?;
     let mut out = RawStdout;
     let mut outcome = RunOutcome::Complete;
@@ -129,7 +133,11 @@ pub fn run_effect(effect: &mut dyn Effect, e: &mut Engine, tty_output: bool) -> 
 }
 
 /// engine::effect::dump_effect on the fx engine: length-prefixed frames.
-pub fn dump_effect(effect: &mut dyn Effect, e: &mut Engine, max_frames: Option<u64>) -> Result<u64, EngineError> {
+pub fn dump_effect(
+    effect: &mut dyn Effect,
+    e: &mut Engine,
+    max_frames: Option<u64>,
+) -> Result<u64, EngineError> {
     effect.build(e)?;
     let mut count: u64 = 0;
     let mut parts: Vec<IoSlice<'static>> = Vec::new();
@@ -205,7 +213,9 @@ unsafe impl Sync for Ring {}
 impl Ring {
     fn new() -> Self {
         Ring {
-            packets: (0..RING).map(|_| UnsafeCell::new(Packet::default())).collect(),
+            packets: (0..RING)
+                .map(|_| UnsafeCell::new(Packet::default()))
+                .collect(),
             head: AtomicU32::new(0),
             done: AtomicU32::new(0),
             quit: AtomicBool::new(false),
@@ -263,12 +273,13 @@ impl Submitter<'_> {
         packet.room = pool_room(&e.visuals);
         self.head = self.head.wrapping_add(1);
         ring.head.store(self.head, SeqCst);
-        if ring.render_sleeping.load(SeqCst) && self.head.wrapping_sub(ring.done.load(Relaxed)) >= WAKE {
+        if ring.render_sleeping.load(SeqCst)
+            && self.head.wrapping_sub(ring.done.load(Relaxed)) >= WAKE
+        {
             self.renderer.unpark();
         }
         !ring.failed.load(Relaxed)
     }
-
 }
 
 impl Drop for Submitter<'_> {
@@ -299,7 +310,10 @@ impl Drop for PanicGuard<'_> {
 /// After a failed write it keeps taking frames (so the main thread never
 /// waits on a full ring) without writing them.
 fn render_loop(ring: &Ring, r: &mut Render, prefix: &[u8], main: Thread) -> std::io::Result<()> {
-    let _guard = PanicGuard { ring, main: main.clone() };
+    let _guard = PanicGuard {
+        ring,
+        main: main.clone(),
+    };
     let mut result = Ok(());
     let mut parts: Vec<IoSlice<'static>> = Vec::new();
     let mut done = 0u32;
@@ -357,7 +371,11 @@ fn run_threaded(
     prefix: &[u8],
     outcome: &mut RunOutcome,
 ) -> std::io::Result<()> {
-    let mut r = e.render.back.take().expect("the renderer runs on another thread");
+    let mut r = e
+        .render
+        .back
+        .take()
+        .expect("the renderer runs on another thread");
     r.sync_pool(&e.visuals);
     r.settle_late();
     let (spans, bytes) = (e.visuals.spans.len(), e.visuals.bytes.len() - COPY_BLOCK);
@@ -365,7 +383,13 @@ fn run_threaded(
     let main = thread::current();
     let result = thread::scope(|s| {
         let render = s.spawn(|| render_loop(&ring, &mut r, prefix, main));
-        let mut submitter = Submitter { ring: &ring, renderer: render.thread().clone(), head: 0, spans, bytes };
+        let mut submitter = Submitter {
+            ring: &ring,
+            renderer: render.thread().clone(),
+            head: 0,
+            spans,
+            bytes,
+        };
         loop {
             if let Some(stop) = e.requested_stop(tty_output) {
                 *outcome = stop;

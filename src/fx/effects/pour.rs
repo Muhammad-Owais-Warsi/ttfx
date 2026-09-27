@@ -34,7 +34,15 @@ pub struct Pour {
 
 impl Pour {
     pub fn new(config: PourConfig) -> Self {
-        Pour { config, groups: Vec::new(), next_group: 0, current: 0, cursor: 0, left: 0, gap: 0 }
+        Pour {
+            config,
+            groups: Vec::new(),
+            next_group: 0,
+            current: 0,
+            cursor: 0,
+            left: 0,
+            gap: 0,
+        }
     }
 
     /// current_group = pending_groups.remove(0), when a group is pending.
@@ -44,7 +52,11 @@ impl Pour {
             self.next_group += 1;
             self.current = g;
             self.left = self.groups[g].len();
-            self.cursor = if g % 2 == 0 { 0 } else { self.left.wrapping_sub(1) };
+            self.cursor = if g.is_multiple_of(2) {
+                0
+            } else {
+                self.left.wrapping_sub(1)
+            };
         }
     }
 }
@@ -59,8 +71,13 @@ impl Effect for Pour {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -73,7 +90,9 @@ impl Effect for Pour {
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         let start = config.starting_color;
         let ten_steps = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[start, c], 10, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[start, c], 10, false)
+                .map_err(other)?
+                .spectrum)
         };
         // the old engine's first pass (TopToBottomLeftToRight) draws nothing
         // and only fills the final color map, which is read directly here
@@ -87,7 +106,12 @@ impl Effect for Pour {
         let total: usize = groups.iter().map(Vec::len).sum();
         // a hint: the two-stop pour gradient reads only the first step count
         // (the rest may be anything, even huge)
-        let steps = config.final_gradient_steps.first().copied().unwrap_or(1).clamp(1, 1 << 10) as usize;
+        let steps = config
+            .final_gradient_steps
+            .first()
+            .copied()
+            .unwrap_or(1)
+            .clamp(1, 1 << 10) as usize;
         e.scenes.reserve(total, total * (steps + 11));
         // the last final color and its pour spectrum; (symbol, final color)
         // -> the frames of a plain scene
@@ -104,11 +128,22 @@ impl Effect for Pour {
                     PourDirection::Right => Coord::new(canvas.left, input.row),
                 };
                 e.set_coordinate(slot, start_coord);
-                let speed = e.rng.uniform(config.movement_speed_range.0, config.movement_speed_range.1);
+                let speed = e
+                    .rng
+                    .uniform(config.movement_speed_range.0, config.movement_speed_range.1);
                 let path = e
-                    .path_new(slot, speed, Some(config.movement_easing), None, 0, false, Name::NONE)
+                    .path_new(
+                        slot,
+                        speed,
+                        Some(config.movement_easing),
+                        None,
+                        0,
+                        false,
+                        Name::NONE,
+                    )
                     .map_err(other)?;
-                e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+                e.path_new_waypoint(path, input, None, Name::NONE)
+                    .map_err(other)?;
                 e.activate_path(self, slot, path);
 
                 let scene = e.scene_new(slot, Name::NONE, false, None, None);
@@ -117,28 +152,52 @@ impl Effect for Pour {
                     let fg = e.input_fg(slot).map(ten_steps).transpose()?;
                     let bg = e.input_bg(slot).map(ten_steps).transpose()?;
                     if fg.is_some() || bg.is_some() {
-                        e.apply_gradient(scene, &[sym], config.final_gradient_frames, fg.as_deref(), bg.as_deref())
-                            .map_err(other)?;
+                        e.apply_gradient(
+                            scene,
+                            &[sym],
+                            config.final_gradient_frames,
+                            fg.as_deref(),
+                            bg.as_deref(),
+                        )
+                        .map_err(other)?;
                     } else {
-                        e.add_frame(scene, sym, config.final_gradient_frames, Some(ColorPair::default()), 0)
-                            .map_err(other)?;
+                        e.add_frame(
+                            scene,
+                            sym,
+                            config.final_gradient_frames,
+                            Some(ColorPair::default()),
+                            0,
+                        )
+                        .map_err(other)?;
                     }
                 } else {
-                    let final_fg = *final_gradient_mapping.get(&input).expect("gradient mapping fg");
+                    let final_fg = *final_gradient_mapping
+                        .get(&input)
+                        .expect("gradient mapping fg");
                     let plain = e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                     match memo.get(&(sym, final_fg)) {
                         Some(frames) if plain => e.append_frames(scene, frames),
                         _ => {
                             if last.as_ref().is_none_or(|(c, _)| *c != final_fg) {
-                                let spectrum =
-                                    Gradient::new(&[start, final_fg], &config.final_gradient_steps, false, false)
-                                        .map_err(other)?
-                                        .spectrum;
+                                let spectrum = Gradient::new(
+                                    &[start, final_fg],
+                                    &config.final_gradient_steps,
+                                    false,
+                                    false,
+                                )
+                                .map_err(other)?
+                                .spectrum;
                                 last = Some((final_fg, spectrum));
                             }
                             let spectrum = &last.as_ref().unwrap().1;
-                            e.apply_gradient(scene, &[sym], config.final_gradient_frames, Some(spectrum), None)
-                                .map_err(other)?;
+                            e.apply_gradient(
+                                scene,
+                                &[sym],
+                                config.final_gradient_frames,
+                                Some(spectrum),
+                                None,
+                            )
+                            .map_err(other)?;
                             if plain {
                                 memo.insert((sym, final_fg), e.scenes.frames_of(scene).to_vec());
                             }
@@ -173,7 +232,11 @@ impl Effect for Pour {
                     }
                     self.left -= 1;
                     let slot = *group.at(self.cursor);
-                    self.cursor = if backward { self.cursor.wrapping_sub(1) } else { self.cursor + 1 };
+                    self.cursor = if backward {
+                        self.cursor.wrapping_sub(1)
+                    } else {
+                        self.cursor + 1
+                    };
                     e.set_visible(slot, true);
                     e.active_insert(slot);
                 }

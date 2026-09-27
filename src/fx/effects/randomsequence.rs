@@ -28,7 +28,11 @@ pub struct RandomSequence {
 
 impl RandomSequence {
     pub fn new(config: RandomSequenceConfig) -> Self {
-        RandomSequence { config, pending: Vec::new(), characters_per_tick: 1 }
+        RandomSequence {
+            config,
+            pending: Vec::new(),
+            characters_per_tick: 1,
+        }
     }
 }
 
@@ -45,8 +49,13 @@ impl Effect for RandomSequence {
         // characters_per_tick = max(int(speed * len(input_characters)), 1)
         self.characters_per_tick = ((config.speed * e.input_chars.len() as f64) as i64).max(1);
         let background = e.config.terminal_background_color;
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -57,16 +66,22 @@ impl Effect for RandomSequence {
             )
             .map_err(other)?;
         let fade = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[background, c], 7, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[background, c], 7, false)
+                .map_err(other)?
+                .spectrum)
         };
         let frames = config.final_gradient_frames;
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         // (symbol, final fg, final bg) -> the frames of a plain scene, as a
         // range of `store`
-        let mut memo: HashMap<(Sym, Option<Color>, Option<Color>), (u32, u32), FxBuild> = HashMap::default();
+        type MemoKey = (Sym, Option<Color>, Option<Color>);
+        let mut memo: HashMap<MemoKey, (u32, u32), FxBuild> = HashMap::default();
         memo.reserve(1024);
         let mut store: Vec<Frame> = Vec::with_capacity(1024 * 8);
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         // one fade (8 frames, 9 for the neutral one) per character
         e.scenes.reserve(characters.len(), characters.len() * 9);
         for &slot in &characters {
@@ -76,21 +91,34 @@ impl Effect for RandomSequence {
             let (fg, bg) = if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
             let plain = e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
             match memo.get(&(sym, fg, bg)) {
-                Some(&(start, len)) if plain => e.append_frames(scene, &store[start as usize..(start + len) as usize]),
+                Some(&(start, len)) if plain => {
+                    e.append_frames(scene, &store[start as usize..(start + len) as usize])
+                }
                 _ => {
                     if fg.is_some() || bg.is_some() {
                         let fg_fade = fg.map(fade).transpose()?;
                         let bg_fade = bg.map(fade).transpose()?;
-                        e.apply_gradient(scene, &[sym], frames, fg_fade.as_deref(), bg_fade.as_deref())
-                            .map_err(other)?;
+                        e.apply_gradient(
+                            scene,
+                            &[sym],
+                            frames,
+                            fg_fade.as_deref(),
+                            bg_fade.as_deref(),
+                        )
+                        .map_err(other)?;
                     } else {
                         let neutral = fade(Color::from_hex(DYNAMIC_NEUTRAL_GRAY).unwrap())?;
-                        e.apply_gradient(scene, &[sym], frames, Some(&neutral), None).map_err(other)?;
-                        e.add_frame(scene, sym, frames, Some(ColorPair::default()), 0).map_err(other)?;
+                        e.apply_gradient(scene, &[sym], frames, Some(&neutral), None)
+                            .map_err(other)?;
+                        e.add_frame(scene, sym, frames, Some(ColorPair::default()), 0)
+                            .map_err(other)?;
                     }
                     if plain {
                         let frames = e.scenes.frames_of(scene);

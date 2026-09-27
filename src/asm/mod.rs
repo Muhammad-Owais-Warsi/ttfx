@@ -45,7 +45,10 @@ pub struct Run<'a> {
 /// `force`). By default the fx engine runs first and the assembly engine is
 /// only offered the runs fx declines.
 pub fn first() -> bool {
-    matches!(std::env::var("TTFX_ASM").as_deref(), Ok("1" | "on" | "force"))
+    matches!(
+        std::env::var("TTFX_ASM").as_deref(),
+        Ok("1" | "on" | "force")
+    )
 }
 
 /// Run the effect on the assembly engine when it can take it. None means the

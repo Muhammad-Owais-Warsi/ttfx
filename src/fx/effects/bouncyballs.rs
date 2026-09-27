@@ -57,8 +57,13 @@ fn other(message: String) -> EngineError {
 impl Effect for BouncyBalls {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -74,7 +79,9 @@ impl Effect for BouncyBalls {
         let ball_symbols: Vec<Sym> = config.ball_symbols.iter().map(|s| e.sym(s)).collect();
         let (ball, final_) = (Name::auto(0), Name::auto(1));
         let with_steps = |a: Color, b: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[a, b], 10, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[a, b], 10, false)
+                .map_err(other)?
+                .spectrum)
         };
 
         // (ball color, ball symbol) -> the ball frame's visual
@@ -84,11 +91,17 @@ impl Effect for BouncyBalls {
         let mut pair_index: HashMap<(u32, Color), u32, FxBuild> = HashMap::default();
         let mut final_memo: HashMap<(Sym, u32), Vec<Frame>, FxBuild> = HashMap::default();
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
-        e.scenes.reserve(characters.len() * 2, characters.len() * 12);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
+        e.scenes
+            .reserve(characters.len() * 2, characters.len() * 12);
         for &slot in &characters {
             let input_coord = e.input_coord(slot);
-            let final_color = *final_gradient_mapping.get(&input_coord).expect("gradient mapping");
+            let final_color = *final_gradient_mapping
+                .get(&input_coord)
+                .expect("gradient mapping");
             let color_index = e.rng.choice_index(config.ball_colors.len());
             let symbol_index = e.rng.choice_index(ball_symbols.len());
             let color = config.ball_colors[color_index];
@@ -96,7 +109,12 @@ impl Effect for BouncyBalls {
             let ball_scene = e.scene_new(slot, ball, false, None, None);
             let visual = &mut ball_visuals[color_index * ball_symbols.len() + symbol_index];
             if visual.0 == NONE {
-                let info = VisualInfo { sym: ball_symbols[symbol_index], fg: Some(color), bg: None, attrs: HAS_COLORS };
+                let info = VisualInfo {
+                    sym: ball_symbols[symbol_index],
+                    fg: Some(color),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                };
                 *visual = e.visuals.make(&e.symbols, info);
             }
             e.add_frame_visual(ball_scene, *visual, 1).map_err(other)?;
@@ -108,22 +126,45 @@ impl Effect for BouncyBalls {
                 if fg.is_some() || bg.is_some() {
                     let fg = fg.map(|c| with_steps(color, c)).transpose()?;
                     let bg = bg.map(|c| with_steps(color, c)).transpose()?;
-                    e.apply_gradient(final_scene, &[sym], FINAL_DURATION, fg.as_deref(), bg.as_deref())
-                        .map_err(other)?;
+                    e.apply_gradient(
+                        final_scene,
+                        &[sym],
+                        FINAL_DURATION,
+                        fg.as_deref(),
+                        bg.as_deref(),
+                    )
+                    .map_err(other)?;
                 } else {
-                    e.add_frame(final_scene, sym, FINAL_DURATION, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(
+                        final_scene,
+                        sym,
+                        FINAL_DURATION,
+                        Some(ColorPair::default()),
+                        0,
+                    )
+                    .map_err(other)?;
                 }
             } else {
                 let next_index = pair_index.len() as u32;
-                let index = *pair_index.entry((color_index as u32, final_color)).or_insert(next_index);
+                let index = *pair_index
+                    .entry((color_index as u32, final_color))
+                    .or_insert(next_index);
                 let plain = e.scene(final_scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                 match final_memo.get(&(sym, index)) {
                     Some(frames) if plain => e.append_frames(final_scene, frames),
                     _ => {
                         let spectrum = with_steps(color, final_color)?;
-                        e.apply_gradient(final_scene, &[sym], FINAL_DURATION, Some(&spectrum), None).map_err(other)?;
+                        e.apply_gradient(
+                            final_scene,
+                            &[sym],
+                            FINAL_DURATION,
+                            Some(&spectrum),
+                            None,
+                        )
+                        .map_err(other)?;
                         if plain {
-                            final_memo.insert((sym, index), e.scenes.frames_of(final_scene).to_vec());
+                            final_memo
+                                .insert((sym, index), e.scenes.frames_of(final_scene).to_vec());
                         }
                     }
                 }
@@ -133,14 +174,28 @@ impl Effect for BouncyBalls {
             let drop_row = (canvas_top as f64 * e.rng.uniform(1.0, 1.5)) as i64;
             e.set_coordinate(slot, Coord::new(input_coord.column, drop_row));
             let path = e
-                .path_new(slot, config.movement_speed, Some(config.movement_easing), None, 0, false, Name::NONE)
+                .path_new(
+                    slot,
+                    config.movement_speed,
+                    Some(config.movement_easing),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, input_coord, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, input_coord, None, Name::NONE)
+                .map_err(other)?;
             e.activate_path(self, slot, path);
             e.activate_scene(self, slot, ball_scene);
             let path_name = e.paths.recs[path as usize].name;
-            e.register_event(slot, Event::PathComplete, Caller::Path(path_name), Action::ActivateScene(final_))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(path_name),
+                Action::ActivateScene(final_),
+            )
+            .map_err(other)?;
         }
 
         // group_by_row: a stable sort by input row, lowest row first
@@ -156,7 +211,11 @@ impl Effect for BouncyBalls {
         self.next_group = 0;
         self.pending.clear();
         // next_frame refills pending with one row group at a time
-        let largest = self.group_ends.iter().scan(0, |start, &end| Some(end - std::mem::replace(start, end))).max();
+        let largest = self
+            .group_ends
+            .iter()
+            .scan(0, |start, &end| Some(end - std::mem::replace(start, end)))
+            .max();
         self.pending.reserve(largest.unwrap_or(0));
         self.ball_delay = 0;
         Ok(())
@@ -168,7 +227,11 @@ impl Effect for BouncyBalls {
             return false;
         }
         if self.pending.is_empty() && groups_left {
-            let start = if self.next_group == 0 { 0 } else { self.group_ends[self.next_group - 1] };
+            let start = if self.next_group == 0 {
+                0
+            } else {
+                self.group_ends[self.next_group - 1]
+            };
             let end = self.group_ends[self.next_group];
             self.next_group += 1;
             self.pending.extend_from_slice(&self.order[start..end]);

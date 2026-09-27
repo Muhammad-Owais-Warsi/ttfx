@@ -103,9 +103,13 @@ impl Effect for Decrypt {
         let slow_decrypt = e.name("slow_decrypt");
         let discovered = e.name("discovered");
 
-        let final_gradient =
-            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
-                .map_err(other)?;
+        let final_gradient = Gradient::new(
+            &self.config.final_gradient_stops,
+            &self.config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -117,24 +121,34 @@ impl Effect for Decrypt {
             )
             .map_err(other)?;
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
-        self.order = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        self.order = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         let order = std::mem::take(&mut self.order);
 
         // typing (5 frames), fast (80), slow (at most 15), discovered (11)
-        e.scenes.reserve(order.len() * 4, order.len() * (5 + 80 + 15 + 11));
+        e.scenes
+            .reserve(order.len() * 4, order.len() * (5 + 80 + 15 + 11));
         // prepare_data_for_type_effect
         self.typing_scene.reserve(order.len());
         for &slot in &order {
             let scene = e.scene_new(slot, typing, false, None, None);
             self.typing_scene.push(scene);
-            let mut frames = [Frame { visual: Visual(NONE), duration: 2 }; BLOCKS.len() + 1];
+            let mut frames = [Frame {
+                visual: Visual(NONE),
+                duration: 2,
+            }; BLOCKS.len() + 1];
             for (block, frame) in frames[..BLOCKS.len()].iter_mut().enumerate() {
                 let color = self.choose_cipher(e);
                 frame.visual = self.cipher_visual(e, color, ENCRYPTED_COUNT + block);
             }
             let symbol = e.rng.choice_index(ENCRYPTED_COUNT);
             let color = self.choose_cipher(e);
-            frames[BLOCKS.len()] = Frame { visual: self.cipher_visual(e, color, symbol), duration: 1 };
+            frames[BLOCKS.len()] = Frame {
+                visual: self.cipher_visual(e, color, symbol),
+                duration: 1,
+            };
             e.add_frames_visual(scene, &frames).map_err(other)?;
         }
 
@@ -152,7 +166,10 @@ impl Effect for Decrypt {
             let color = self.choose_cipher(e);
             let mut symbols = [0u16; 80];
             e.rng.fill_below(ENCRYPTED_COUNT as u64, &mut symbols);
-            let mut frames = [Frame { visual: Visual(NONE), duration: 2 }; 80];
+            let mut frames = [Frame {
+                visual: Visual(NONE),
+                duration: 2,
+            }; 80];
             for (frame, &symbol) in frames.iter_mut().zip(&symbols) {
                 frame.visual = self.cipher_visual(e, color, symbol as usize);
             }
@@ -160,7 +177,10 @@ impl Effect for Decrypt {
             // slow_decrypt: 1-15 frames of long or flickering durations
             let slow = e.scene_new(slot, slow_decrypt, false, None, None);
             let count = e.rng.randint(1, 15) as usize;
-            let mut frames = [Frame { visual: Visual(NONE), duration: 0 }; 15];
+            let mut frames = [Frame {
+                visual: Visual(NONE),
+                duration: 0,
+            }; 15];
             for frame in &mut frames[..count] {
                 let symbol = e.rng.choice_index(ENCRYPTED_COUNT);
                 // 30% chance of extra long duration; a wide range reduces
@@ -170,7 +190,10 @@ impl Effect for Decrypt {
                 } else {
                     e.rng.randrange(3, 6)
                 };
-                *frame = Frame { visual: self.cipher_visual(e, color, symbol), duration: duration as u32 };
+                *frame = Frame {
+                    visual: self.cipher_visual(e, color, symbol),
+                    duration: duration as u32,
+                };
             }
             e.add_frames_visual(slow, &frames[..count]).map_err(other)?;
             // discovered: white -> the final color in 10 steps
@@ -185,9 +208,11 @@ impl Effect for Decrypt {
                 let fg = spectrum(e.input_fg(slot))?;
                 let bg = spectrum(e.input_bg(slot))?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(scene, &[sym], 5, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], 5, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(scene, sym, 5, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(scene, sym, 5, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
                 let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).unwrap();
@@ -197,19 +222,33 @@ impl Effect for Decrypt {
                 match discovered_memo.get(&(sym, index)) {
                     Some(frames) if plain => e.append_frames(scene, frames),
                     _ => {
-                        let spectrum = Gradient::with_steps(&[white, final_fg], 10, false).map_err(other)?.spectrum;
-                        e.apply_gradient(scene, &[sym], 5, Some(&spectrum), None).map_err(other)?;
+                        let spectrum = Gradient::with_steps(&[white, final_fg], 10, false)
+                            .map_err(other)?
+                            .spectrum;
+                        e.apply_gradient(scene, &[sym], 5, Some(&spectrum), None)
+                            .map_err(other)?;
                         if plain {
-                            discovered_memo.insert((sym, index), e.scenes.frames_of(scene).to_vec());
+                            discovered_memo
+                                .insert((sym, index), e.scenes.frames_of(scene).to_vec());
                         }
                     }
                 }
             }
             // fast complete -> slow; slow complete -> discovered; start on fast
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(fast_decrypt), Action::ActivateScene(slow_decrypt))
-                .map_err(other)?;
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(slow_decrypt), Action::ActivateScene(discovered))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(fast_decrypt),
+                Action::ActivateScene(slow_decrypt),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(slow_decrypt),
+                Action::ActivateScene(discovered),
+            )
+            .map_err(other)?;
             e.activate_scene(self, slot, fast);
         }
         self.order = order;

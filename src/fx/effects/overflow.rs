@@ -14,8 +14,8 @@ use crate::effects::overflow::OverflowConfig;
 use crate::engine::animation::ExistingColorHandling;
 use crate::engine::error::EngineError;
 use crate::engine::terminal::{CharacterFilter, CharacterGroup};
-use crate::fx::{At, Engine, Hooks, Visual, VisualInfo, CF_PREEXISTING, NONE};
 use crate::fx::visual::HAS_COLORS;
+use crate::fx::{At, Engine, Hooks, Visual, VisualInfo, CF_PREEXISTING, NONE};
 use crate::utils::geometry::Coord;
 use crate::utils::graphics::{Color, ColorPair, Gradient};
 use crate::utils::pycompat::floor_div;
@@ -63,7 +63,12 @@ impl Overflow {
 
     fn push_row(&mut self, start: usize, final_: bool) {
         let len = (self.slots.len() - start) as u32;
-        self.rows.push(Row { start: start as u32, len, final_, last: NONE });
+        self.rows.push(Row {
+            start: start as u32,
+            len,
+            final_,
+            last: NONE,
+        });
     }
 
     /// Row.move_up.
@@ -100,8 +105,15 @@ impl Overflow {
             let sym = *e.ch.sym.at(slot);
             let cached = row_cache.at_mut(sym.0);
             if cached.0 == NONE {
-                *cached =
-                    e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS });
+                *cached = e.visuals.make(
+                    &e.symbols,
+                    VisualInfo {
+                        sym,
+                        fg: Some(color),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    },
+                );
             }
         }
         let row_cache = &*row_cache;
@@ -119,8 +131,13 @@ impl crate::fx::run::Effect for Overflow {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -130,10 +147,19 @@ impl crate::fx::run::Effect for Overflow {
                 config.final_gradient_direction,
             )
             .map_err(other)?;
-        let fills_filter = CharacterFilter { inner_fill_chars: true, outer_fill_chars: true, ..Default::default() };
+        let fills_filter = CharacterFilter {
+            inner_fill_chars: true,
+            outer_fill_chars: true,
+            ..Default::default()
+        };
         let (lower_range, upper_range) = config.overflow_cycles_range;
-        let mut groups = e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowTopToBottom);
-        let cycles = if upper_range > 0 { e.rng.randint(lower_range, upper_range) } else { 0 };
+        let mut groups =
+            e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowTopToBottom);
+        let cycles = if upper_range > 0 {
+            e.rng.randint(lower_range, upper_range)
+        } else {
+            0
+        };
         let total: usize = groups.iter().map(Vec::len).sum();
         self.slots.reserve(total * cycles.max(0) as usize);
         for _ in 0..cycles {
@@ -161,7 +187,10 @@ impl crate::fx::run::Effect for Overflow {
                 let colors = if dynamic {
                     ColorPair::new(e.input_fg(slot), e.input_bg(slot))
                 } else {
-                    let color = final_gradient_mapping.get(&e.input_coord(slot)).copied().unwrap_or(black);
+                    let color = final_gradient_mapping
+                        .get(&e.input_coord(slot))
+                        .copied()
+                        .unwrap_or(black);
                     ColorPair::new(Some(color), None)
                 };
                 e.set_appearance(slot, Some(current), Some(colors));
@@ -170,10 +199,21 @@ impl crate::fx::run::Effect for Overflow {
             self.push_row(start, true);
         }
         self.delay = 0;
-        let steps = floor_div(canvas.top, (config.overflow_gradient_stops.len() as i64 - 1).max(1)).max(1);
-        self.spectrum = Gradient::with_steps(&config.overflow_gradient_stops, steps, false).map_err(other)?.spectrum;
+        let steps = floor_div(
+            canvas.top,
+            (config.overflow_gradient_stops.len() as i64 - 1).max(1),
+        )
+        .max(1);
+        self.spectrum = Gradient::with_steps(&config.overflow_gradient_stops, steps, false)
+            .map_err(other)?
+            .spectrum;
         if e.existing_color_handling() != ExistingColorHandling::Always && cycles > 0 {
-            self.nsym = groups.iter().flatten().map(|&s| e.input_sym(s).0 as usize + 1).max().unwrap_or(0);
+            self.nsym = groups
+                .iter()
+                .flatten()
+                .map(|&s| e.input_sym(s).0 as usize + 1)
+                .max()
+                .unwrap_or(0);
             self.cache = vec![Visual(NONE); self.spectrum.len() * self.nsym];
         }
         self.active.reserve(self.rows.len());
@@ -222,7 +262,8 @@ impl crate::fx::run::Effect for Overflow {
         }
         let canvas_top = e.canvas.top;
         let (rows, slots) = (&self.rows, &self.slots);
-        self.active.retain(|&r| e.ch.coord.at(*slots.at(rows.at(r).start)).row <= canvas_top);
+        self.active
+            .retain(|&r| e.ch.coord.at(*slots.at(rows.at(r).start)).row <= canvas_top);
         e.update(self);
         true
     }

@@ -69,7 +69,11 @@ pub struct Waypoint {
 impl Waypoint {
     #[inline]
     pub fn key(&self) -> WaypointKey {
-        WaypointKey { coord: self.coord, name: self.name, bezier: self.bezier }
+        WaypointKey {
+            coord: self.coord,
+            name: self.name,
+            bezier: self.bezier,
+        }
     }
 }
 
@@ -220,7 +224,11 @@ impl Mirrors {
             return None;
         }
         let tab = *self.etab.at(slot);
-        let factor = if tab == 0 { step / max } else { *etab.at(tab as usize + step as usize) };
+        let factor = if tab == 0 {
+            step / max
+        } else {
+            *etab.at(tab as usize + step as usize)
+        };
         let d = factor * *self.total.at(slot);
         let (off, hi, flags) = (*self.off.at(slot), *self.hi.at(slot), *self.flags.at(slot));
         let mut r = d - off;
@@ -239,7 +247,12 @@ impl Mirrors {
         } else {
             r / hi
         };
-        let (sx, sy, ex, ey) = (*self.sx.at(slot), *self.sy.at(slot), *self.ex.at(slot), *self.ey.at(slot));
+        let (sx, sy, ex, ey) = (
+            *self.sx.at(slot),
+            *self.sy.at(slot),
+            *self.ex.at(slot),
+            *self.ey.at(slot),
+        );
         let u = 1.0 - t;
         let (x, y) = if flags & MF_CURVE == 0 {
             (u * sx + t * ex, u * sy + t * ey)
@@ -291,7 +304,12 @@ impl Paths {
         if seg.end.bezier == NONE {
             geometry::find_coord_on_line(seg.start.coord, seg.end.coord, t)
         } else {
-            geometry::find_coord_on_bezier_curve(seg.start.coord, self.bezier(seg.end.bezier), seg.end.coord, t)
+            geometry::find_coord_on_bezier_curve(
+                seg.start.coord,
+                self.bezier(seg.end.bezier),
+                seg.end.coord,
+                t,
+            )
         }
     }
 
@@ -335,7 +353,9 @@ impl Paths {
                     // paths nearly always walk their table to the end
                     let offset = self.etab.len() as u32;
                     let ease = *self.eases.at(p.ease);
-                    self.etab.extend((0..=max_steps).map(|step| ease.ease(step as f64 / max_steps as f64)));
+                    self.etab.extend(
+                        (0..=max_steps).map(|step| ease.ease(step as f64 / max_steps as f64)),
+                    );
                     self.etab_map.insert(key, offset);
                     offset
                 }
@@ -467,7 +487,12 @@ impl Paths {
                 return;
             }
         }
-        let (step, max, total, last) = (p.current_step as f64, p.max_steps as f64, p.total_distance, p.last_distance_reached);
+        let (step, max, total, last) = (
+            p.current_step as f64,
+            p.max_steps as f64,
+            p.total_distance,
+            p.last_distance_reached,
+        );
         self.recs.at_mut(path).mslot = slot;
         let m = &mut self.m;
         *m.path.at_mut(slot) = path;
@@ -552,7 +577,9 @@ impl Engine {
             name
         };
         if speed <= 0.0 {
-            return Err(format!("Path speed must be greater than 0. Received: {speed}"));
+            return Err(format!(
+                "Path speed must be greater than 0. Received: {speed}"
+            ));
         }
         let ease = match ease {
             Some(ease) => match self.paths.eases.iter().position(|&e| e == ease) {
@@ -606,7 +633,10 @@ impl Engine {
     /// The path's waypoint called `name`.
     pub fn path_waypoint(&self, path: u32, name: Name) -> Option<Waypoint> {
         let p = &self.paths.recs[path as usize];
-        self.paths.wps[p.wp_start as usize..(p.wp_start + p.wp_count) as usize].iter().find(|w| w.name == name).copied()
+        self.paths.wps[p.wp_start as usize..(p.wp_start + p.wp_count) as usize]
+            .iter()
+            .find(|w| w.name == name)
+            .copied()
     }
 
     /// Path.new_waypoint + _add_waypoint_to_path: from the second waypoint
@@ -628,7 +658,10 @@ impl Engine {
             Name::auto(n)
         } else {
             if self.path_waypoint(path, name).is_some() {
-                return Err(format!("duplicate waypoint id: {}", self.names.to_string(name)));
+                return Err(format!(
+                    "duplicate waypoint id: {}",
+                    self.names.to_string(name)
+                ));
             }
             name
         };
@@ -637,7 +670,11 @@ impl Engine {
             Some(control) if !control.is_empty() => self.paths.intern_bezier(control),
             _ => NONE,
         };
-        let waypoint = Waypoint { coord, name, bezier };
+        let waypoint = Waypoint {
+            coord,
+            name,
+            bezier,
+        };
         let paths = &mut self.paths;
         paths.unmirror(path);
         let p = &mut paths.recs[path as usize];
@@ -651,7 +688,13 @@ impl Engine {
         p.wp_count += 1;
         if p.wp_count < 2 {
             p.seg_base = paths.segs.len() as u32;
-            paths.segs.push(Segment { start: waypoint, end: waypoint, distance: 0.0, entered: false, exited: false });
+            paths.segs.push(Segment {
+                start: waypoint,
+                end: waypoint,
+                distance: 0.0,
+                entered: false,
+                exited: false,
+            });
             return Ok(waypoint);
         }
         let prev = paths.wps[(p.wp_start + p.wp_count - 2) as usize];
@@ -665,7 +708,13 @@ impl Engine {
             p.seg_base = region_end;
             paths.segs.extend_from_within(start..start + block as usize);
         }
-        paths.segs.push(Segment { start: prev, end: waypoint, distance, entered: false, exited: false });
+        paths.segs.push(Segment {
+            start: prev,
+            end: waypoint,
+            distance,
+            entered: false,
+            exited: false,
+        });
         p.seg_count += 1;
         p.max_steps = round_half_even(p.total_distance / p.speed);
         p.etab = 0;
@@ -744,10 +793,18 @@ impl Engine {
         paths.release(slot);
         paths.unmirror(path);
         let p = &paths.recs[path as usize];
-        assert!(p.wp_count > 0, "activate_path: empty path {}", self.names.to_string(p.name));
+        assert!(
+            p.wp_count > 0,
+            "activate_path: empty path {}",
+            self.names.to_string(p.name)
+        );
         let first = paths.wps[p.wp_start as usize];
         let distance = paths.distance_to(current, &first);
-        let origin = Waypoint { coord: current, name: Name::NONE, bezier: NONE };
+        let origin = Waypoint {
+            coord: current,
+            name: Name::NONE,
+            bezier: NONE,
+        };
         self.ch.path[slot as usize] = path;
         let p = &mut paths.recs[path as usize];
         p.total_distance += distance;
@@ -756,7 +813,13 @@ impl Engine {
         }
         p.flags |= PF_ORIGIN;
         p.origin_distance = distance;
-        paths.segs[p.seg_base as usize] = Segment { start: origin, end: first, distance, entered: false, exited: false };
+        paths.segs[p.seg_base as usize] = Segment {
+            start: origin,
+            end: first,
+            distance,
+            entered: false,
+            exited: false,
+        };
         p.current_step = 0;
         p.hold_left = p.hold;
         p.max_steps = round_half_even(p.total_distance / p.speed);
@@ -776,7 +839,9 @@ impl Engine {
     }
 
     pub fn activate_path_name(&mut self, hooks: &mut dyn Hooks, slot: u32, name: Name) {
-        let path = self.path_find(slot, name).expect("activate_path: path not found");
+        let path = self
+            .path_find(slot, name)
+            .expect("activate_path: path not found");
         self.activate_path(hooks, slot, path);
     }
 
@@ -835,14 +900,20 @@ impl Engine {
                     self.paths.segs.at_mut(at).entered = true;
                     if self.observes(slot, Event::SegmentEntered) {
                         quiet = false;
-                        self.handle_event(hooks, slot, Event::SegmentEntered, Caller::Waypoint(seg.end.key()));
+                        self.handle_event(
+                            hooks,
+                            slot,
+                            Event::SegmentEntered,
+                            Caller::Waypoint(seg.end.key()),
+                        );
                     }
                 }
                 break;
             }
             distance_to_travel -= seg.distance;
             if !seg.entered || !seg.exited {
-                let observes = self.observes(slot, Event::SegmentEntered) || self.observes(slot, Event::SegmentExited);
+                let observes = self.observes(slot, Event::SegmentEntered)
+                    || self.observes(slot, Event::SegmentExited);
                 if !observes {
                     let s = self.paths.segs.at_mut(at);
                     s.entered = true;
@@ -852,7 +923,12 @@ impl Engine {
                     let key = seg.end.key();
                     if !seg.entered {
                         self.paths.segs.at_mut(at).entered = true;
-                        self.handle_event(hooks, slot, Event::SegmentEntered, Caller::Waypoint(key));
+                        self.handle_event(
+                            hooks,
+                            slot,
+                            Event::SegmentEntered,
+                            Caller::Waypoint(key),
+                        );
                     }
                     if !seg.exited {
                         let (first, _) = self.paths.recs.at(path).segs();
@@ -907,7 +983,10 @@ impl Engine {
     pub(super) fn motion_tail(&mut self, hooks: &mut dyn Hooks, slot: u32) {
         // Python re-reads active_path after the step (a callback may swap it)
         let path = *self.ch.path.at(slot);
-        assert!(path != NONE, "active path cleared mid-move (would be an upstream crash)");
+        assert!(
+            path != NONE,
+            "active path cleared mid-move (would be an upstream crash)"
+        );
         let p = self.paths.recs.at_mut(path);
         if p.current_step != p.max_steps {
             return;

@@ -30,7 +30,12 @@ pub struct Smoke {
 
 impl Smoke {
     pub fn new(config: SmokeConfig) -> Self {
-        Smoke { config, smoke_scene: Vec::new(), links: Links(Vec::new()), fill: BreadthFirst::default() }
+        Smoke {
+            config,
+            smoke_scene: Vec::new(),
+            links: Links(Vec::new()),
+            fill: BreadthFirst::default(),
+        }
     }
 }
 
@@ -74,7 +79,13 @@ impl Links {
 /// SpanningTreeGenerator.get_neighbors(unlinked_only=True, limit): north,
 /// east, south, west.
 #[inline]
-fn unlinked_neighbors(e: &Engine, links: &Links, limit: bool, slot: u32, out: &mut [u32; 4]) -> usize {
+fn unlinked_neighbors(
+    e: &Engine,
+    links: &Links,
+    limit: bool,
+    slot: u32,
+    out: &mut [u32; 4],
+) -> usize {
     let n = e.neighbors(slot);
     let mut count = 0;
     for neighbor in [n.north, n.east, n.south, n.west] {
@@ -152,7 +163,12 @@ impl BreadthFirst {
         queue.push(start);
         let mut explored = vec![false; char_count];
         explored[start as usize] = true;
-        BreadthFirst { queue, explored, head: 0, complete: false }
+        BreadthFirst {
+            queue,
+            explored,
+            head: 0,
+            complete: false,
+        }
     }
 
     /// step(): the explored_last_step range of `queue`.
@@ -185,14 +201,19 @@ impl Effect for Smoke {
         let config = self.config.clone();
         let limit = !config.use_whole_canvas;
         let char_count = e.char_count();
-        let filter =
-            CharacterFilter { input_chars: true, inner_fill_chars: true, outer_fill_chars: true, added_chars: false };
+        let filter = CharacterFilter {
+            input_chars: true,
+            inner_fill_chars: true,
+            outer_fill_chars: true,
+            added_chars: false,
+        };
         let characters = e.get_characters(filter, CharacterSort::TopToBottomLeftToRight);
 
         // PrimsWeighted::new: the starting character, then the weights
         let start_coord = e.canvas.random_coord(&mut e.rng, false, limit);
-        let start =
-            e.char_at_input_coord(start_coord).ok_or_else(|| other("Unable to find a starting character.".into()))?;
+        let start = e
+            .char_at_input_coord(start_coord)
+            .ok_or_else(|| other("Unable to find a starting character.".into()))?;
         let mut draws = vec![0u16; characters.len()];
         e.rng.fill_below(WEIGHTS as u64, &mut draws);
         let mut weights = vec![0u8; char_count];
@@ -200,7 +221,12 @@ impl Effect for Smoke {
             weights[slot as usize] = w as u8;
         }
         let mut links = Links(vec![[NONE; 4]; char_count]);
-        let mut gen = PrimsWeighted { limit, weights, buckets: vec![Vec::new(); WEIGHTS], nonempty: 0 };
+        let mut gen = PrimsWeighted {
+            limit,
+            weights,
+            buckets: vec![Vec::new(); WEIGHTS],
+            nonempty: 0,
+        };
         gen.add_links(e, &links, start);
 
         // the fill start: a random coord's character, else BreadthFirst's own
@@ -210,14 +236,20 @@ impl Effect for Smoke {
             Some(slot) => slot,
             None => {
                 let coord = e.canvas.random_coord(&mut e.rng, false, limit);
-                e.char_at_input_coord(coord).ok_or_else(|| other("Unable to find a starting character.".into()))?
+                e.char_at_input_coord(coord)
+                    .ok_or_else(|| other("Unable to find a starting character.".into()))?
             }
         };
 
         // SmokeIterator.build()
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -229,9 +261,15 @@ impl Effect for Smoke {
             .map_err(other)?;
         let blk = Color::from_hex("000000").unwrap();
         // Gradient(*smoke_gradient_stops, *final_gradient_stops[::-1], steps=(3, 4))
-        let smoke_stops: Vec<Color> =
-            config.smoke_gradient_stops.iter().chain(config.final_gradient_stops.iter().rev()).copied().collect();
-        let smoke_spectrum = Gradient::new(&smoke_stops, &[3, 4], false, false).map_err(other)?.spectrum;
+        let smoke_stops: Vec<Color> = config
+            .smoke_gradient_stops
+            .iter()
+            .chain(config.final_gradient_stops.iter().rev())
+            .copied()
+            .collect();
+        let smoke_spectrum = Gradient::new(&smoke_stops, &[3, 4], false, false)
+            .map_err(other)?
+            .spectrum;
         let smoke_syms: Vec<Sym> = config.smoke_symbols.iter().map(|s| e.sym(s)).collect();
         let mut paint_stops: Vec<Color> = config.final_gradient_stops.clone();
         paint_stops.push(blk);
@@ -254,9 +292,15 @@ impl Effect for Smoke {
             let sym = e.input_sym(slot);
             let plain = !(always && e.uses_preexisting_colors(slot));
             let (final_colors, base) = if dynamic {
-                (ColorPair::new(e.input_fg(slot), e.input_bg(slot)), dynamic_base)
+                (
+                    ColorPair::new(e.input_fg(slot), e.input_bg(slot)),
+                    dynamic_base,
+                )
             } else {
-                let color = final_gradient_mapping.get(&e.input_coord(slot)).copied().unwrap_or(blk);
+                let color = final_gradient_mapping
+                    .get(&e.input_coord(slot))
+                    .copied()
+                    .unwrap_or(blk);
                 (ColorPair::new(Some(color), None), starting)
             };
 
@@ -267,7 +311,8 @@ impl Effect for Smoke {
                 _ => {
                     let scene = e.scene_new(slot, paint_name, false, None, None);
                     if dynamic {
-                        e.add_frame(scene, sym, 5, Some(final_colors), 0).map_err(other)?;
+                        e.add_frame(scene, sym, 5, Some(final_colors), 0)
+                            .map_err(other)?;
                     } else {
                         // Gradient(*final_gradient_stops, final_fg_color, steps=5)
                         let final_color = final_colors.fg_color.unwrap();
@@ -275,11 +320,14 @@ impl Effect for Smoke {
                             Some(spectrum) => spectrum,
                             None => {
                                 *paint_stops.last_mut().unwrap() = final_color;
-                                let spectrum = Gradient::with_steps(&paint_stops, 5, false).map_err(other)?.spectrum;
+                                let spectrum = Gradient::with_steps(&paint_stops, 5, false)
+                                    .map_err(other)?
+                                    .spectrum;
                                 spectrum_memo.entry(final_color).or_insert(spectrum)
                             }
                         };
-                        e.apply_gradient(scene, &[sym], 5, Some(spectrum), None).map_err(other)?;
+                        e.apply_gradient(scene, &[sym], 5, Some(spectrum), None)
+                            .map_err(other)?;
                     }
                     if plain {
                         paint_memo.insert((sym, final_colors), scene);
@@ -295,10 +343,12 @@ impl Effect for Smoke {
                     let scene = e.scene_new(slot, smoke_name, false, None, None);
                     if dynamic {
                         for &smoke_sym in &smoke_syms {
-                            e.add_frame(scene, smoke_sym, 10, Some(final_colors), 0).map_err(other)?;
+                            e.add_frame(scene, smoke_sym, 10, Some(final_colors), 0)
+                                .map_err(other)?;
                         }
                     } else {
-                        e.apply_gradient(scene, &smoke_syms, 3, Some(&smoke_spectrum), None).map_err(other)?;
+                        e.apply_gradient(scene, &smoke_syms, 3, Some(&smoke_spectrum), None)
+                            .map_err(other)?;
                     }
                     if plain {
                         smoke_memo.insert(smoke_key, scene);
@@ -307,8 +357,13 @@ impl Effect for Smoke {
                 }
             };
             self.smoke_scene[slot as usize] = smoke;
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(smoke_name), Action::ActivateScene(paint_name))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(smoke_name),
+                Action::ActivateScene(paint_name),
+            )
+            .map_err(other)?;
             e.set_appearance(slot, Some(sym), Some(base));
         }
 

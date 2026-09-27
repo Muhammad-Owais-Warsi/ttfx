@@ -207,7 +207,10 @@ mod arm {
     #[target_feature(enable = "neon")]
     #[inline]
     pub fn lane_mask2(lanes: u32) -> uint64x2_t {
-        vtstq_u64(vdupq_n_u64(lanes as u64), vcombine_u64(vcreate_u64(1), vcreate_u64(2)))
+        vtstq_u64(
+            vdupq_n_u64(lanes as u64),
+            vcombine_u64(vcreate_u64(1), vcreate_u64(2)),
+        )
     }
 
     /// Two u32 lane masks widened to u64 lane masks.
@@ -236,10 +239,15 @@ mod tests {
         for _ in 0..10_000 {
             let mut bytes = [0u8; 64];
             for b in &mut bytes {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 *b = if x >> 63 != 0 { 0xff } else { 0 };
             }
-            let want = bytes.iter().enumerate().fold(0u64, |m, (i, &b)| m | ((b != 0) as u64) << i);
+            let want = bytes
+                .iter()
+                .enumerate()
+                .fold(0u64, |m, (i, &b)| m | ((b != 0) as u64) << i);
             // SAFETY: NEON is baseline on aarch64.
             let (all, first, lanes) = unsafe { masks(&bytes) };
             assert_eq!(all, want);

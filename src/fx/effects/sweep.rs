@@ -61,14 +61,27 @@ struct ShimmerMemo<'a> {
 impl<'a> ShimmerMemo<'a> {
     fn new(symbols: &'a [Sym], colors: &'a [Color]) -> Self {
         let size = symbols.len().saturating_mul(colors.len());
-        let memo = if size <= MEMO_LIMIT { vec![Visual(NONE); size] } else { Vec::new() };
-        ShimmerMemo { symbols, colors, memo }
+        let memo = if size <= MEMO_LIMIT {
+            vec![Visual(NONE); size]
+        } else {
+            Vec::new()
+        };
+        ShimmerMemo {
+            symbols,
+            colors,
+            memo,
+        }
     }
 
     #[inline]
     fn visual(&mut self, e: &mut Engine, symbol: usize, color: usize) -> Visual {
         let make = |e: &mut Engine| {
-            let info = VisualInfo { sym: self.symbols[symbol], fg: Some(self.colors[color]), bg: None, attrs: HAS_COLORS };
+            let info = VisualInfo {
+                sym: self.symbols[symbol],
+                fg: Some(self.colors[color]),
+                bg: None,
+                attrs: HAS_COLORS,
+            };
             e.visuals.make(&e.symbols, info)
         };
         if self.memo.is_empty() {
@@ -102,8 +115,13 @@ fn draw_below(e: &mut Engine, n: usize, out: &mut [u16], wide: &mut [usize]) {
 impl Effect for Sweep {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_fg_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_fg_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_fg_gradient
             .build_coordinate_color_mapping(
@@ -114,7 +132,10 @@ impl Effect for Sweep {
                 config.final_gradient_direction,
             )
             .map_err(other)?;
-        let grays: Vec<Color> = GRAYS.iter().map(|hex| Color::from_hex(hex).unwrap()).collect();
+        let grays: Vec<Color> = GRAYS
+            .iter()
+            .map(|hex| Color::from_hex(hex).unwrap())
+            .collect();
         let gray_808080 = Color::from_hex("#808080").unwrap();
         let black = Color::from_hex("000000").unwrap();
 
@@ -122,7 +143,10 @@ impl Effect for Sweep {
         let mut palette: Vec<Color> = Vec::new();
         if dynamic {
             // the order is fixed (no RNG), so the input list serves as is
-            for slot in e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight) {
+            for slot in e.get_characters(
+                CharacterFilter::default(),
+                CharacterSort::TopToBottomLeftToRight,
+            ) {
                 palette.extend(e.input_fg(slot));
                 palette.extend(e.input_bg(slot));
             }
@@ -139,14 +163,25 @@ impl Effect for Sweep {
         let initial_sweep = e.name("initial_sweep");
         let second_sweep = e.name("second_sweep");
 
-        let fills_filter = CharacterFilter { inner_fill_chars: true, outer_fill_chars: true, ..Default::default() };
+        let fills_filter = CharacterFilter {
+            inner_fill_chars: true,
+            outer_fill_chars: true,
+            ..Default::default()
+        };
         let characters = e.get_characters(fills_filter, CharacterSort::TopToBottomLeftToRight);
         let count = symbols.len();
-        e.scenes.reserve(characters.len() * 2, characters.len() * 2 * (count + 1));
+        e.scenes
+            .reserve(characters.len() * 2, characters.len() * 2 * (count + 1));
         self.scenes = vec![(NONE, NONE); e.char_count()];
         let mut draws = vec![0u16; count];
         let mut picks = vec![0usize; count];
-        let mut frames = vec![Frame { visual: Visual(NONE), duration: 5 }; count + 1];
+        let mut frames = vec![
+            Frame {
+                visual: Visual(NONE),
+                duration: 5
+            };
+            count + 1
+        ];
         for slot in characters {
             let sym = e.input_sym(slot);
             let final_colors = if e.is_fill(slot) {
@@ -158,41 +193,72 @@ impl Effect for Sweep {
             } else if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
 
             // initial_sweep: the symbols in random grays, then the symbol in 808080
             let initial = e.scene_new(slot, initial_sweep, false, None, None);
             draw_below(e, grays.len(), &mut draws, &mut picks);
             for (i, &pick) in picks.iter().enumerate() {
-                frames[i] = Frame { visual: gray_memo.visual(e, i, pick), duration: 5 };
+                frames[i] = Frame {
+                    visual: gray_memo.visual(e, i, pick),
+                    duration: 5,
+                };
             }
             let index = sym.0 as usize;
             if settle_memo.len() <= index {
                 settle_memo.resize(index + 1, Visual(NONE));
             }
             if settle_memo[index].0 == NONE {
-                let info = VisualInfo { sym, fg: Some(gray_808080), bg: None, attrs: HAS_COLORS };
+                let info = VisualInfo {
+                    sym,
+                    fg: Some(gray_808080),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                };
                 settle_memo[index] = e.visuals.make(&e.symbols, info);
             }
-            frames[count] = Frame { visual: settle_memo[index], duration: 1 };
+            frames[count] = Frame {
+                visual: settle_memo[index],
+                duration: 1,
+            };
             e.add_frames_visual(initial, &frames).map_err(other)?;
 
             // second_sweep: the symbols in random palette colors, then the final look
             let second = e.scene_new(slot, second_sweep, false, None, None);
             draw_below(e, palette.len(), &mut draws, &mut picks);
             for (i, &pick) in picks.iter().enumerate() {
-                frames[i] = Frame { visual: color_memo.visual(e, i, pick), duration: 5 };
+                frames[i] = Frame {
+                    visual: color_memo.visual(e, i, pick),
+                    duration: 5,
+                };
             }
-            let info = VisualInfo { sym, fg: final_colors.0, bg: final_colors.1, attrs: HAS_COLORS };
-            frames[count] = Frame { visual: e.visuals.make(&e.symbols, info), duration: 1 };
+            let info = VisualInfo {
+                sym,
+                fg: final_colors.0,
+                bg: final_colors.1,
+                attrs: HAS_COLORS,
+            };
+            frames[count] = Frame {
+                visual: e.visuals.make(&e.symbols, info),
+                duration: 1,
+            };
             e.add_frames_visual(second, &frames).map_err(other)?;
             self.scenes[slot as usize] = (initial, second);
         }
 
-        let groups_first_sweep = e.get_characters_grouped(fills_filter, config.first_sweep_direction);
-        self.easer = Some(SequenceEaser::new(groups_first_sweep, Easing::InOutCirc, 100));
-        self.groups_second_sweep = e.get_characters_grouped(fills_filter, config.second_sweep_direction);
+        let groups_first_sweep =
+            e.get_characters_grouped(fills_filter, config.first_sweep_direction);
+        self.easer = Some(SequenceEaser::new(
+            groups_first_sweep,
+            Easing::InOutCirc,
+            100,
+        ));
+        self.groups_second_sweep =
+            e.get_characters_grouped(fills_filter, config.second_sweep_direction);
         Ok(())
     }
 

@@ -141,11 +141,15 @@ impl Rings {
         for c in &mut coords {
             // find_coords_in_rect is column-major
             let index = e.rng.randrange(0, side * side);
-            *c = Coord::new(origin.column - gap + index / side, origin.row - gap + index % side);
+            *c = Coord::new(
+                origin.column - gap + index / side,
+                origin.row - gap + index % side,
+            );
         }
         e.path_reset(path);
         for c in coords {
-            e.path_new_waypoint(path, c, None, Name::NONE).expect("fresh waypoint");
+            e.path_new_waypoint(path, c, None, Name::NONE)
+                .expect("fresh waypoint");
         }
         coords[0]
     }
@@ -157,18 +161,30 @@ impl Rings {
             let r = &self.ring_chars[i];
             let slot = self.ring_slots[i];
             let (target, action) = match r.last {
-                Last::Ring(k) => (self.ring_coord(r, k), Action::Callback(CB_RING_PLAY, k as i64)),
+                Last::Ring(k) => (
+                    self.ring_coord(r, k),
+                    Action::Callback(CB_RING_PLAY, k as i64),
+                ),
                 Last::Path(p) => {
                     // its only waypoint, auto id "0"
-                    let first = e.path_waypoint(p, Name::auto(0)).expect("condense waypoint");
-                    (first.coord, Action::ActivatePath(e.paths.recs[p as usize].name))
+                    let first = e
+                        .path_waypoint(p, Name::auto(0))
+                        .expect("condense waypoint");
+                    (
+                        first.coord,
+                        Action::ActivatePath(e.paths.recs[p as usize].name),
+                    )
                 }
             };
             let gradient_scene = r.gradient_scene;
-            let condense = e.path_new(slot, 0.1, None, None, 0, false, Name::NONE).expect("condense path");
-            e.path_new_waypoint(condense, target, None, Name::NONE).expect("fresh waypoint");
+            let condense = e
+                .path_new(slot, 0.1, None, None, 0, false, Name::NONE)
+                .expect("condense path");
+            e.path_new_waypoint(condense, target, None, Name::NONE)
+                .expect("fresh waypoint");
             let name = e.paths.recs[condense as usize].name;
-            e.register_event(slot, Event::PathComplete, Caller::Path(name), action).expect("fresh condense path");
+            e.register_event(slot, Event::PathComplete, Caller::Path(name), action)
+                .expect("fresh condense path");
             e.activate_path(self, slot, condense);
             e.activate_scene(self, slot, gradient_scene);
         }
@@ -208,12 +224,29 @@ impl Rings {
             let (path, scene) = (r.disperse_path, r.disperse_scene);
             let first = self.make_disperse_waypoints(e, path, ring_start);
             let initial = e
-                .path_new(slot, 0.3, Some(Easing::OutCubic), None, 0, false, Name::NONE)
+                .path_new(
+                    slot,
+                    0.3,
+                    Some(Easing::OutCubic),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .expect("initial path");
-            e.path_new_waypoint(initial, first, None, Name::NONE).expect("fresh waypoint");
-            let (name, disperse) = (e.paths.recs[initial as usize].name, e.paths.recs[path as usize].name);
-            e.register_event(slot, Event::PathComplete, Caller::Path(name), Action::ActivatePath(disperse))
-                .expect("fresh initial path");
+            e.path_new_waypoint(initial, first, None, Name::NONE)
+                .expect("fresh waypoint");
+            let (name, disperse) = (
+                e.paths.recs[initial as usize].name,
+                e.paths.recs[path as usize].name,
+            );
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(name),
+                Action::ActivatePath(disperse),
+            )
+            .expect("fresh initial path");
             e.activate_scene(self, slot, scene);
             e.activate_path(self, slot, initial);
             e.active_insert(slot);
@@ -228,7 +261,10 @@ impl Rings {
 
     /// Everyone visible and home; ring characters fade back.
     fn final_phase(&mut self, e: &mut Engine) {
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             e.set_visible(slot, true);
             let home = self.home_path[slot as usize];
@@ -287,9 +323,16 @@ fn ring_scene_frames(
     match memo.get(&key) {
         Some(frames) if plain => e.append_frames(scene, frames),
         _ => {
-            let (stops, duration) = if disperse { ([ring_color, final_fg], 10) } else { ([final_fg, ring_color], 3) };
-            let spectrum = Gradient::with_steps(&stops, 8, false).map_err(other)?.spectrum;
-            e.apply_gradient(scene, &[sym], duration, Some(&spectrum), None).map_err(other)?;
+            let (stops, duration) = if disperse {
+                ([ring_color, final_fg], 10)
+            } else {
+                ([final_fg, ring_color], 3)
+            };
+            let spectrum = Gradient::with_steps(&stops, 8, false)
+                .map_err(other)?
+                .spectrum;
+            e.apply_gradient(scene, &[sym], duration, Some(&spectrum), None)
+                .map_err(other)?;
             if plain {
                 memo.insert(key, e.scenes.frames_of(scene).to_vec());
             }
@@ -303,9 +346,15 @@ impl Effect for Rings {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
         // ring_gap = int(max(round(min(top, right) * config.ring_gap), 1))
-        self.ring_gap = round_half_even(canvas.top.min(canvas.right) as f64 * config.ring_gap).max(1);
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        self.ring_gap =
+            round_half_even(canvas.top.min(canvas.right) as f64 * config.ring_gap).max(1);
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -327,19 +376,33 @@ impl Effect for Rings {
 
         // character_final_color_map
         let mut final_colors = vec![ColorPair::default(); slots];
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for &slot in &characters {
             let colors = if dynamic {
                 ColorPair::new(e.input_fg(slot), e.input_bg(slot))
             } else {
                 let input = e.input_coord(slot);
-                ColorPair::new(Some(*final_gradient_mapping.get(&input).expect("gradient mapping fg")), None)
+                ColorPair::new(
+                    Some(
+                        *final_gradient_mapping
+                            .get(&input)
+                            .expect("gradient mapping fg"),
+                    ),
+                    None,
+                )
             };
             final_colors[slot as usize] = colors;
             let scene = e.scene_new(slot, Name::NONE, false, None, None);
-            e.add_frame(scene, e.input_sym(slot), 1, Some(colors), 0).map_err(other)?;
-            let path = e.path_new(slot, 0.8, Some(Easing::OutQuad), None, 0, false, home).map_err(other)?;
-            e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE).map_err(other)?;
+            e.add_frame(scene, e.input_sym(slot), 1, Some(colors), 0)
+                .map_err(other)?;
+            let path = e
+                .path_new(slot, 0.8, Some(Easing::OutQuad), None, 0, false, home)
+                .map_err(other)?;
+            e.path_new_waypoint(path, e.input_coord(slot), None, Name::NONE)
+                .map_err(other)?;
             self.home_path[slot as usize] = path;
             e.activate_scene(self, slot, scene);
             e.set_visible(slot, true);
@@ -354,14 +417,22 @@ impl Effect for Rings {
         let mut radius = 1;
         while radius < radius_limit {
             let ring_coords = geometry::find_coords_on_circle(center, radius, 7 * radius, true);
-            let in_canvas = ring_coords.iter().filter(|&&c| canvas.coord_is_in_canvas(c)).count();
+            let in_canvas = ring_coords
+                .iter()
+                .filter(|&&c| canvas.coord_is_in_canvas(c))
+                .count();
             if (in_canvas as f64) / (ring_coords.len() as f64) < 0.25 {
                 break;
             }
             let color = config.ring_colors[rings.len() % config.ring_colors.len()];
             // Ring.__init__: rotation_speed
             let speed = e.rng.uniform(config.spin_speed.0, config.spin_speed.1);
-            rings.push((self.coords.len() as u32, ring_coords.len() as u32, color, speed));
+            rings.push((
+                self.coords.len() as u32,
+                ring_coords.len() as u32,
+                color,
+                speed,
+            ));
             self.coords.extend(&ring_coords);
             self.coords.extend(ring_coords.iter().rev());
             radius += self.ring_gap;
@@ -384,12 +455,21 @@ impl Effect for Rings {
                 let gradient_scene = e.scene_new(slot, gradient, false, None, None);
                 ring_scene_frames(e, &mut memo, gradient_scene, slot, colors, color, false)?;
                 let coords = offset + if clockwise { n } else { 0 };
-                let ring_path = e.path_new(slot, speed, None, None, 0, false, ring).map_err(other)?;
-                e.path_new_waypoint(ring_path, self.coords[(coords + start) as usize], None, Name::NONE)
+                let ring_path = e
+                    .path_new(slot, speed, None, None, 0, false, ring)
                     .map_err(other)?;
+                e.path_new_waypoint(
+                    ring_path,
+                    self.coords[(coords + start) as usize],
+                    None,
+                    Name::NONE,
+                )
+                .map_err(other)?;
                 let disperse_scene = e.scene_new(slot, disperse, false, None, None);
                 ring_scene_frames(e, &mut memo, disperse_scene, slot, colors, color, true)?;
-                let disperse_path = e.path_new(slot, 0.14, None, None, 0, true, disperse).map_err(other)?;
+                let disperse_path = e
+                    .path_new(slot, 0.14, None, None, 0, true, disperse)
+                    .map_err(other)?;
                 if n >= 2 {
                     e.register_event(
                         slot,
@@ -419,17 +499,28 @@ impl Effect for Rings {
         self.history = vec![(0.0, 0.0); history as usize];
 
         // make external waypoints for characters not in rings
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             if self.ring_index[slot as usize] != NONE {
                 continue;
             }
             let external_coord = canvas.random_coord(&mut e.rng, true, false);
-            let path = e.path_new(slot, 0.8, Some(Easing::OutSine), None, 0, false, external).map_err(other)?;
-            e.path_new_waypoint(path, external_coord, None, Name::NONE).map_err(other)?;
-            self.non_ring_chars.push(slot);
-            e.register_event(slot, Event::PathComplete, Caller::Path(external), Action::Callback(CB_SET_INVISIBLE, 0))
+            let path = e
+                .path_new(slot, 0.8, Some(Easing::OutSine), None, 0, false, external)
                 .map_err(other)?;
+            e.path_new_waypoint(path, external_coord, None, Name::NONE)
+                .map_err(other)?;
+            self.non_ring_chars.push(slot);
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(external),
+                Action::Callback(CB_SET_INVISIBLE, 0),
+            )
+            .map_err(other)?;
         }
         self.phase = Phase::Start;
         self.initial_disperse_complete = false;

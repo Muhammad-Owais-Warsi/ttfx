@@ -35,7 +35,13 @@ pub struct ErrorCorrect {
 
 impl ErrorCorrect {
     pub fn new(config: ErrorCorrectConfig) -> Self {
-        ErrorCorrect { config, swapped: Vec::new(), swapped_head: 0, swap_delay: 0, error_name: Name::NONE }
+        ErrorCorrect {
+            config,
+            swapped: Vec::new(),
+            swapped_head: 0,
+            swap_delay: 0,
+            error_name: Name::NONE,
+        }
     }
 }
 
@@ -59,7 +65,12 @@ impl<'a> Remaining<'a> {
         let n = items.len();
         let tree = (0..=n).map(|i| (i & i.wrapping_neg()) as u32).collect();
         let top = if n == 0 { 0 } else { 1 << n.ilog2() };
-        Remaining { items, tree, top, len: n }
+        Remaining {
+            items,
+            tree,
+            top,
+            len: n,
+        }
     }
 
     /// Remove and return the k-th remaining element.
@@ -109,7 +120,15 @@ impl Memo {
         let entry = self.by_sym.at_mut(i as u32);
         if entry[0].0 == NONE {
             for (visual, color) in entry.iter_mut().zip([self.error, self.white]) {
-                *visual = e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS });
+                *visual = e.visuals.make(
+                    &e.symbols,
+                    VisualInfo {
+                        sym,
+                        fg: Some(color),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    },
+                );
             }
         }
         *entry
@@ -124,8 +143,13 @@ impl Effect for ErrorCorrect {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -136,7 +160,10 @@ impl Effect for ErrorCorrect {
             )
             .map_err(other)?;
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
 
         // character_final_color_map, by slot
         let slots = e.char_count();
@@ -149,30 +176,49 @@ impl Effect for ErrorCorrect {
             let (fg, bg) = if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
             *final_fg.at_mut(slot) = fg;
             *final_bg.at_mut(slot) = bg;
             let scene = e.scene_new(slot, Name::NONE, false, None, None);
             let sym = e.input_sym(slot);
-            e.add_frame(scene, sym, 1, Some(ColorPair::new(fg, bg)), 0).map_err(other)?;
+            e.add_frame(scene, sym, 1, Some(ColorPair::new(fg, bg)), 0)
+                .map_err(other)?;
             e.activate_scene(self, slot, scene);
             e.set_visible(slot, true);
         }
 
-        let correcting_spectrum = Gradient::with_steps(&[config.error_color, config.correct_color], 10, false)
-            .map_err(other)?
-            .spectrum;
+        let correcting_spectrum =
+            Gradient::with_steps(&[config.error_color, config.correct_color], 10, false)
+                .map_err(other)?
+                .spectrum;
         let visual = |e: &mut Engine, symbol: &str, color: Color| {
             let sym = e.sym(symbol);
-            e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS })
+            e.visuals.make(
+                &e.symbols,
+                VisualInfo {
+                    sym,
+                    fg: Some(color),
+                    bg: None,
+                    attrs: HAS_COLORS,
+                },
+            )
         };
         let mut memo = Memo {
             error: config.error_color,
             white: Color::from_hex("ffffff").unwrap(),
             by_sym: Vec::new(),
-            first_wipe: [Frame { visual: Visual(NONE), duration: 3 }; 8],
-            last_wipe: [Frame { visual: Visual(NONE), duration: 3 }; 7],
+            first_wipe: [Frame {
+                visual: Visual(NONE),
+                duration: 3,
+            }; 8],
+            last_wipe: [Frame {
+                visual: Visual(NONE),
+                duration: 3,
+            }; 7],
             correcting: Vec::new(),
             finals: HashMap::default(),
         };
@@ -202,9 +248,19 @@ impl Effect for ErrorCorrect {
             for (slot, other_slot) in [(char1, char2), (char2, char1)] {
                 let home = e.input_coord(slot);
                 e.set_coordinate(slot, e.input_coord(other_slot));
-                let path =
-                    e.path_new(slot, config.movement_speed, None, None, 0, false, input_coord).map_err(other)?;
-                e.path_new_waypoint(path, home, None, Name::NONE).map_err(other)?;
+                let path = e
+                    .path_new(
+                        slot,
+                        config.movement_speed,
+                        None,
+                        None,
+                        0,
+                        false,
+                        input_coord,
+                    )
+                    .map_err(other)?;
+                e.path_new_waypoint(path, home, None, Name::NONE)
+                    .map_err(other)?;
             }
             self.swapped.push((char1, char2));
             for slot in [char1, char2] {
@@ -213,29 +269,45 @@ impl Effect for ErrorCorrect {
                 let [error_visual, white_visual] = memo.sym_visuals(e, sym);
                 let first_wipe = e.scene_new(slot, Name::NONE, false, None, None);
                 let last_wipe = e.scene_new(slot, Name::NONE, false, None, None);
-                e.add_frames_visual(first_wipe, &memo.first_wipe).map_err(other)?;
+                e.add_frames_visual(first_wipe, &memo.first_wipe)
+                    .map_err(other)?;
                 if dynamic {
-                    e.add_frames_visual(last_wipe, &memo.last_wipe[..6]).map_err(other)?;
+                    e.add_frames_visual(last_wipe, &memo.last_wipe[..6])
+                        .map_err(other)?;
                     let colors = ColorPair::new(*final_fg.at(slot), *final_bg.at(slot));
                     let last = e.sym(BLOCK_WIPE_END[6]);
-                    e.add_frame(last_wipe, last, 3, Some(colors), 0).map_err(other)?;
+                    e.add_frame(last_wipe, last, 3, Some(colors), 0)
+                        .map_err(other)?;
                 } else {
-                    e.add_frames_visual(last_wipe, &memo.last_wipe).map_err(other)?;
+                    e.add_frames_visual(last_wipe, &memo.last_wipe)
+                        .map_err(other)?;
                 }
                 let initial = e.scene_new(slot, Name::NONE, false, None, None);
-                e.add_frame_visual(initial, error_visual, 1).map_err(other)?;
+                e.add_frame_visual(initial, error_visual, 1)
+                    .map_err(other)?;
                 e.activate_scene(self, slot, initial);
                 let error = e.scene_new(slot, error_name, false, None, None);
-                let mut frames = [Frame { visual: error_block, duration: 3 }; 20];
+                let mut frames = [Frame {
+                    visual: error_block,
+                    duration: 3,
+                }; 20];
                 for pair in frames.chunks_exact_mut(2) {
                     pair[1].visual = white_visual;
                 }
                 e.add_frames_visual(error, &frames).map_err(other)?;
-                let correcting = e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
+                let correcting =
+                    e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
                 if !memo.correcting.is_empty() && plain(e, correcting) {
                     e.append_frames(correcting, &memo.correcting);
                 } else {
-                    e.apply_gradient(correcting, &[full_block], 3, Some(&correcting_spectrum), None).map_err(other)?;
+                    e.apply_gradient(
+                        correcting,
+                        &[full_block],
+                        3,
+                        Some(&correcting_spectrum),
+                        None,
+                    )
+                    .map_err(other)?;
                     if plain(e, correcting) {
                         memo.correcting = e.scenes.frames_of(correcting).to_vec();
                     }
@@ -244,16 +316,21 @@ impl Effect for ErrorCorrect {
                 if dynamic {
                     // _get_dynamic_final_scene
                     let spectrum = |c: Option<Color>| -> Result<Option<Vec<Color>>, EngineError> {
-                        c.map(|c| Gradient::with_steps(&[config.correct_color, c], 10, false).map(|g| g.spectrum))
-                            .transpose()
-                            .map_err(other)
+                        c.map(|c| {
+                            Gradient::with_steps(&[config.correct_color, c], 10, false)
+                                .map(|g| g.spectrum)
+                        })
+                        .transpose()
+                        .map_err(other)
                     };
                     let fg = spectrum(e.input_fg(slot))?;
                     let bg = spectrum(e.input_bg(slot))?;
                     if fg.is_some() || bg.is_some() {
-                        e.apply_gradient(final_scene, &[sym], 3, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                        e.apply_gradient(final_scene, &[sym], 3, fg.as_deref(), bg.as_deref())
+                            .map_err(other)?;
                     } else {
-                        e.add_frame(final_scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                        e.add_frame(final_scene, sym, 3, Some(ColorPair::default()), 0)
+                            .map_err(other)?;
                     }
                 } else {
                     let fg = final_fg.at(slot).expect("gradient mapping fg");
@@ -262,10 +339,14 @@ impl Effect for ErrorCorrect {
                         Some(frames) if is_plain => e.append_frames(final_scene, frames),
                         _ => {
                             let spectrum =
-                                Gradient::with_steps(&[config.correct_color, fg], 10, false).map_err(other)?.spectrum;
-                            e.apply_gradient(final_scene, &[sym], 3, Some(&spectrum), None).map_err(other)?;
+                                Gradient::with_steps(&[config.correct_color, fg], 10, false)
+                                    .map_err(other)?
+                                    .spectrum;
+                            e.apply_gradient(final_scene, &[sym], 3, Some(&spectrum), None)
+                                .map_err(other)?;
                             if is_plain {
-                                memo.finals.insert((sym, fg), e.scenes.frames_of(final_scene).to_vec());
+                                memo.finals
+                                    .insert((sym, fg), e.scenes.frames_of(final_scene).to_vec());
                             }
                         }
                     }
@@ -273,16 +354,36 @@ impl Effect for ErrorCorrect {
                 let first_name = e.scene_name(first_wipe);
                 let last_name = e.scene_name(last_wipe);
                 let registrations = [
-                    (Event::SceneComplete, Caller::Scene(error_name), Action::ActivateScene(first_name)),
+                    (
+                        Event::SceneComplete,
+                        Caller::Scene(error_name),
+                        Action::ActivateScene(first_name),
+                    ),
                     (
                         Event::SceneComplete,
                         Caller::Scene(first_name),
                         Action::ActivateScene(e.scene_name(correcting)),
                     ),
-                    (Event::SceneComplete, Caller::Scene(first_name), Action::ActivatePath(input_coord)),
-                    (Event::PathActivated, Caller::Path(input_coord), Action::SetLayer(1)),
-                    (Event::PathComplete, Caller::Path(input_coord), Action::SetLayer(0)),
-                    (Event::PathComplete, Caller::Path(input_coord), Action::ActivateScene(last_name)),
+                    (
+                        Event::SceneComplete,
+                        Caller::Scene(first_name),
+                        Action::ActivatePath(input_coord),
+                    ),
+                    (
+                        Event::PathActivated,
+                        Caller::Path(input_coord),
+                        Action::SetLayer(1),
+                    ),
+                    (
+                        Event::PathComplete,
+                        Caller::Path(input_coord),
+                        Action::SetLayer(0),
+                    ),
+                    (
+                        Event::PathComplete,
+                        Caller::Path(input_coord),
+                        Action::ActivateScene(last_name),
+                    ),
                     (
                         Event::SceneComplete,
                         Caller::Scene(last_name),
@@ -290,7 +391,8 @@ impl Effect for ErrorCorrect {
                     ),
                 ];
                 for (event, caller, action) in registrations {
-                    e.register_event(slot, event, caller, action).map_err(other)?;
+                    e.register_event(slot, event, caller, action)
+                        .map_err(other)?;
                 }
             }
         }

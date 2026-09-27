@@ -25,7 +25,7 @@ impl ColorFrequency {
         if let Some(entry) = self.0.iter_mut().find(|(c, _)| c == color) {
             entry.1 += 1;
         } else {
-            self.0.push((color.clone(), 1));
+            self.0.push((*color, 1));
         }
     }
 }
@@ -137,8 +137,14 @@ impl<'a> Preprocessor<'a> {
                     } else if is_supported_private_mode_sequence(&sequence) {
                         // ignored: cursor show/hide, autowrap on/off
                     } else {
-                        let (new_row, new_column) =
-                            apply_cursor_sequence(&sequence, &params, &intermediates, final_byte, row, column)?;
+                        let (new_row, new_column) = apply_cursor_sequence(
+                            &sequence,
+                            &params,
+                            &intermediates,
+                            final_byte,
+                            row,
+                            column,
+                        )?;
                         row = new_row;
                         column = new_column;
                         max_row = max_row.max(row);
@@ -158,7 +164,10 @@ impl<'a> Preprocessor<'a> {
                 i += 1;
             } else {
                 let (symbol, count) = if chars[i] == '\t' {
-                    (' ', self.config.tab_width - (column % self.config.tab_width))
+                    (
+                        ' ',
+                        self.config.tab_width - (column % self.config.tab_width),
+                    )
                 } else {
                     (chars[i], 1)
                 };
@@ -173,7 +182,9 @@ impl<'a> Preprocessor<'a> {
             }
         }
 
-        self.screen_lines(max_row, max_column, &state, |row, column| screen.get(&(row, column)).copied())
+        self.screen_lines(max_row, max_column, &state, |row, column| {
+            screen.get(&(row, column)).copied()
+        })
     }
 
     /// preprocess for input without ESC or CR: every cell is written once,
@@ -189,15 +200,26 @@ impl<'a> Preprocessor<'a> {
                 continue;
             }
             let row = rows.last_mut().unwrap();
-            let (symbol, count) = if c == '\t' { (' ', tab_width - (row.len() as i64 % tab_width)) } else { (c, 1) };
+            let (symbol, count) = if c == '\t' {
+                (' ', tab_width - (row.len() as i64 % tab_width))
+            } else {
+                (c, 1)
+            };
             for _ in 0..count {
                 let id = self.build_character(symbol, &state)?;
                 row.push(id);
             }
         }
         let max_row = rows.len() as i64 - 1;
-        let max_column = rows.iter().map(|r| r.len() as i64 - 1).max().unwrap_or(0).max(0);
-        self.screen_lines(max_row, max_column, &state, |row, column| rows[row as usize].get(column as usize).copied())
+        let max_column = rows
+            .iter()
+            .map(|r| r.len() as i64 - 1)
+            .max()
+            .unwrap_or(0)
+            .max(0);
+        self.screen_lines(max_row, max_column, &state, |row, column| {
+            rows[row as usize].get(column as usize).copied()
+        })
     }
 
     /// The screen's rows (0..=max_row, columns 0..=max_column): a written
@@ -245,7 +267,11 @@ impl<'a> Preprocessor<'a> {
     /// build_character: allocates an id (even for characters later discarded),
     /// captures active colors, bumps the color frequency at CREATION time (even
     /// if a later cursor write overwrites the cell — see plan.md §5.13).
-    fn build_character(&mut self, symbol: char, state: &ActiveState) -> Result<CharId, EngineError> {
+    fn build_character(
+        &mut self,
+        symbol: char,
+        state: &ActiveState,
+    ) -> Result<CharId, EngineError> {
         let mut ch = InputChar {
             character_id: *self.next_character_id,
             symbol,
@@ -359,7 +385,9 @@ impl<'a> Preprocessor<'a> {
                     let (normalized_sequence, color) = match color_mode {
                         5 => {
                             if idx + 2 >= parameters.len() {
-                                return Err(EngineError::UnsupportedAnsiSequence(sequence.to_string()));
+                                return Err(EngineError::UnsupportedAnsiSequence(
+                                    sequence.to_string(),
+                                ));
                             }
                             let code = parameters[idx + 2];
                             let color = xterm_color(code)?;
@@ -368,15 +396,21 @@ impl<'a> Preprocessor<'a> {
                         }
                         2 => {
                             if idx + 4 >= parameters.len() {
-                                return Err(EngineError::UnsupportedAnsiSequence(sequence.to_string()));
+                                return Err(EngineError::UnsupportedAnsiSequence(
+                                    sequence.to_string(),
+                                ));
                             }
-                            let hex: String = (2..5).map(|o| format!("{:02X}", parameters[idx + o])).collect();
+                            let hex: String = (2..5)
+                                .map(|o| format!("{:02X}", parameters[idx + o]))
+                                .collect();
                             let color = Color::from_hex(&hex).map_err(EngineError::Other)?;
                             let (r, g, b) = color.rgb_ints();
                             idx += 4;
                             (format!("\x1b[{selector};2;{r};{g};{b}m"), color)
                         }
-                        _ => return Err(EngineError::UnsupportedAnsiSequence(sequence.to_string())),
+                        _ => {
+                            return Err(EngineError::UnsupportedAnsiSequence(sequence.to_string()))
+                        }
                     };
                     if is_fg {
                         state.fg_sequence = normalized_sequence;
@@ -403,14 +437,18 @@ fn xterm_color(code: i64) -> Result<Color, EngineError> {
     if (0..=255).contains(&code) {
         Ok(Color::from_xterm(code as u8))
     } else {
-        Err(EngineError::Other(format!("invalid xterm color code in input: {code}")))
+        Err(EngineError::Other(format!(
+            "invalid xterm color code in input: {code}"
+        )))
     }
 }
 
 /// parse_csi_parameters: only digits and ';' allowed; empty fields are 0.
 fn parse_csi_parameters(parameters: &str) -> Result<Vec<i64>, EngineError> {
     if parameters.chars().any(|c| !c.is_ascii_digit() && c != ';') {
-        return Err(EngineError::UnsupportedAnsiSequence(format!("\x1b[{parameters}")));
+        return Err(EngineError::UnsupportedAnsiSequence(format!(
+            "\x1b[{parameters}"
+        )));
     }
     if parameters.is_empty() {
         return Ok(vec![]);
@@ -429,7 +467,10 @@ fn default_parameter(parameters: &[i64]) -> i64 {
 }
 
 fn is_supported_private_mode_sequence(sequence: &str) -> bool {
-    matches!(sequence, "\x1b[?25h" | "\x1b[?25l" | "\x1b[?7h" | "\x1b[?7l")
+    matches!(
+        sequence,
+        "\x1b[?25h" | "\x1b[?25l" | "\x1b[?7h" | "\x1b[?7l"
+    )
 }
 
 fn apply_cursor_sequence(

@@ -63,8 +63,15 @@ struct Parts {
     input: u32,
 }
 
-const NO_PARTS: Parts =
-    Parts { weaken: NONE, flash: NONE, strengthen: NONE, dust: NONE, fall: NONE, top: NONE, input: NONE };
+const NO_PARTS: Parts = Parts {
+    weaken: NONE,
+    flash: NONE,
+    strengthen: NONE,
+    dust: NONE,
+    fall: NONE,
+    top: NONE,
+    input: NONE,
+};
 
 /// Event callbacks: the old engine's actions by name, on the ids directly.
 const WEAKENED: u32 = 0;
@@ -137,9 +144,17 @@ fn other(message: String) -> EngineError {
 }
 
 /// Gradient::with_steps([from, to], steps) when both colors are present.
-fn pair(from: Option<Color>, to: Option<Color>, steps: i64) -> Result<Option<Vec<Color>>, EngineError> {
+fn pair(
+    from: Option<Color>,
+    to: Option<Color>,
+    steps: i64,
+) -> Result<Option<Vec<Color>>, EngineError> {
     match (from, to) {
-        (Some(from), Some(to)) => Ok(Some(Gradient::with_steps(&[from, to], steps, false).map_err(other)?.spectrum)),
+        (Some(from), Some(to)) => Ok(Some(
+            Gradient::with_steps(&[from, to], steps, false)
+                .map_err(other)?
+                .spectrum,
+        )),
         _ => Ok(None),
     }
 }
@@ -164,7 +179,12 @@ fn derive(
     let dust_colors = ColorPair::new(adjust(g, 0.55), adjust(bg, 0.55));
     let mut visuals = [Visual(NONE); 3];
     for (visual, &sym) in visuals.iter_mut().zip(dust) {
-        let info = VisualInfo { sym, fg: dust_colors.fg_color, bg: dust_colors.bg_color, attrs: HAS_COLORS };
+        let info = VisualInfo {
+            sym,
+            fg: dust_colors.fg_color,
+            bg: dust_colors.bg_color,
+            attrs: HAS_COLORS,
+        };
         *visual = e.visuals.make(&e.symbols, info);
     }
     Ok(Derived {
@@ -184,8 +204,13 @@ impl Effect for Crumble {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -205,18 +230,27 @@ impl Effect for Crumble {
         let slots = e.char_count();
         self.parts = vec![NO_PARTS; slots];
         // (fg, bg) -> index into derived; (symbol, pair index) -> the frames
-        let mut pair_index: HashMap<(Option<Color>, Option<Color>), u32, FxBuild> = HashMap::default();
+        let mut pair_index: HashMap<(Option<Color>, Option<Color>), u32, FxBuild> =
+            HashMap::default();
         let mut derived: Vec<Derived> = Vec::new();
         let mut memo: HashMap<(Sym, u32), Frames, FxBuild> = HashMap::default();
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         // initial, weaken (at most 10), flash (7), strengthen (10), dust (5)
-        e.scenes.reserve(characters.len() * 5, characters.len() * 33);
+        e.scenes
+            .reserve(characters.len() * 5, characters.len() * 33);
         for &slot in &characters {
             let input_coord = e.input_coord(slot);
             let sym = e.input_sym(slot);
             let final_color = *final_gradient_mapping.get(&input_coord).unwrap();
-            let key = if dynamic { (e.input_fg(slot), e.input_bg(slot)) } else { (Some(final_color), None) };
+            let key = if dynamic {
+                (e.input_fg(slot), e.input_bg(slot))
+            } else {
+                (Some(final_color), None)
+            };
             let next_index = derived.len() as u32;
             let index = *pair_index.entry(key).or_insert(next_index);
             if index == next_index {
@@ -231,61 +265,132 @@ impl Effect for Crumble {
             let initial = e.scene_new(slot, Name::NONE, false, None, None);
             match cached {
                 Some(f) => e.add_frames_visual(initial, &f.0[0]).map_err(other)?,
-                None => e.add_frame(initial, sym, 1, Some(d.weak), 0).map_err(other)?,
+                None => e
+                    .add_frame(initial, sym, 1, Some(d.weak), 0)
+                    .map_err(other)?,
             }
             e.activate_scene(self, slot, initial);
-            let fall = e.path_new(slot, 0.65, Some(Easing::OutBounce), None, 0, false, Name::NONE).map_err(other)?;
-            e.path_new_waypoint(fall, Coord::new(input_coord.column, canvas.bottom), None, Name::NONE)
+            let fall = e
+                .path_new(
+                    slot,
+                    0.65,
+                    Some(Easing::OutBounce),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .map_err(other)?;
+            e.path_new_waypoint(
+                fall,
+                Coord::new(input_coord.column, canvas.bottom),
+                None,
+                Name::NONE,
+            )
+            .map_err(other)?;
             let weaken_scene = e.scene_new(slot, weaken, false, None, None);
             match cached {
                 Some(f) => e.add_frames_visual(weaken_scene, &f.0[1]).map_err(other)?,
                 None => e
-                    .apply_gradient(weaken_scene, &[sym], 4, d.weaken_fg.as_deref(), d.weaken_bg.as_deref())
+                    .apply_gradient(
+                        weaken_scene,
+                        &[sym],
+                        4,
+                        d.weaken_fg.as_deref(),
+                        d.weaken_bg.as_deref(),
+                    )
                     .map_err(other)?,
             }
-            let top_path = e.path_new(slot, 1.0, Some(Easing::OutQuint), None, 0, false, top).map_err(other)?;
-            e.path_new_waypoint(top_path, Coord::new(input_coord.column, canvas.top), Some(&control), Name::NONE)
+            let top_path = e
+                .path_new(slot, 1.0, Some(Easing::OutQuint), None, 0, false, top)
                 .map_err(other)?;
-            let input_path = e.path_new(slot, 1.0, None, None, 0, false, input).map_err(other)?;
-            e.path_new_waypoint(input_path, input_coord, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(
+                top_path,
+                Coord::new(input_coord.column, canvas.top),
+                Some(&control),
+                Name::NONE,
+            )
+            .map_err(other)?;
+            let input_path = e
+                .path_new(slot, 1.0, None, None, 0, false, input)
+                .map_err(other)?;
+            e.path_new_waypoint(input_path, input_coord, None, Name::NONE)
+                .map_err(other)?;
             let flash = e.scene_new(slot, Name::NONE, false, None, None);
             match cached {
                 Some(f) => e.add_frames_visual(flash, &f.0[2]).map_err(other)?,
-                None => {
-                    e.apply_gradient(flash, &[sym], 4, d.flash_fg.as_deref(), d.flash_bg.as_deref()).map_err(other)?
-                }
+                None => e
+                    .apply_gradient(
+                        flash,
+                        &[sym],
+                        4,
+                        d.flash_fg.as_deref(),
+                        d.flash_bg.as_deref(),
+                    )
+                    .map_err(other)?,
             }
             let strengthen = e.scene_new(slot, Name::NONE, false, None, None);
             match cached {
                 Some(f) => e.add_frames_visual(strengthen, &f.0[3]).map_err(other)?,
-                None if d.strengthen_plain => {
-                    e.add_frame(strengthen, sym, 4, Some(ColorPair::default()), 0).map_err(other)?
-                }
+                None if d.strengthen_plain => e
+                    .add_frame(strengthen, sym, 4, Some(ColorPair::default()), 0)
+                    .map_err(other)?,
                 None => e
-                    .apply_gradient(strengthen, &[sym], 4, d.strengthen_fg.as_deref(), d.strengthen_bg.as_deref())
+                    .apply_gradient(
+                        strengthen,
+                        &[sym],
+                        4,
+                        d.strengthen_fg.as_deref(),
+                        d.strengthen_bg.as_deref(),
+                    )
                     .map_err(other)?,
             }
             if cached.is_none() && e.scene(initial).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0 {
-                let frames = [initial, weaken_scene, flash, strengthen].map(|s| e.scenes.frames_of(s).to_vec());
+                let frames = [initial, weaken_scene, flash, strengthen]
+                    .map(|s| e.scenes.frames_of(s).to_vec());
                 memo.insert((sym, index), Frames(frames));
             }
             let dust = e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
             let mut picks = [0u16; 5];
             e.rng.fill_below(DUST_SYMBOLS.len() as u64, &mut picks);
-            let frames = picks.map(|p| Frame { visual: d.dust[p as usize], duration: 1 });
+            let frames = picks.map(|p| Frame {
+                visual: d.dust[p as usize],
+                duration: 1,
+            });
             e.add_frames_visual(dust, &frames).map_err(other)?;
 
             // (the old engine's actions, in order, as callbacks)
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(weaken), Action::Callback(WEAKENED, 0))
-                .map_err(other)?;
-            e.register_event(slot, Event::PathComplete, Caller::Path(input), Action::Callback(RETURNED, 0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(weaken),
+                Action::Callback(WEAKENED, 0),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(input),
+                Action::Callback(RETURNED, 0),
+            )
+            .map_err(other)?;
             let flash_name = e.scene_name(flash);
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(flash_name), Action::Callback(FLASHED, 0))
-                .map_err(other)?;
-            self.parts[slot as usize] =
-                Parts { weaken: weaken_scene, flash, strengthen, dust, fall, top: top_path, input: input_path };
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(flash_name),
+                Action::Callback(FLASHED, 0),
+            )
+            .map_err(other)?;
+            self.parts[slot as usize] = Parts {
+                weaken: weaken_scene,
+                flash,
+                strengthen,
+                dust,
+                fall,
+                top: top_path,
+                input: input_path,
+            };
         }
         self.pending = characters.clone();
         e.rng.shuffle(&mut self.pending);

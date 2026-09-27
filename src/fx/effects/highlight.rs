@@ -55,7 +55,8 @@ fn other(message: String) -> EngineError {
 impl Effect for Highlight {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let groups = e.get_characters_grouped(CharacterFilter::default(), config.highlight_direction);
+        let groups =
+            e.get_characters_grouped(CharacterFilter::default(), config.highlight_direction);
         self.starts.clear();
         self.members.clear();
         self.starts.push(0);
@@ -65,8 +66,13 @@ impl Effect for Highlight {
         }
 
         let canvas = &e.canvas;
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -88,13 +94,19 @@ impl Effect for Highlight {
         let mut memo: HashMap<[u64; 3], (u32, u32), FxBuild> =
             HashMap::with_capacity_and_hasher(e.char_count().min(1 << 14), FxBuild::default());
         let mut frames: Vec<Frame> = Vec::new();
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             let sym = e.input_sym(slot);
             let (base, bg) = if dynamic {
                 (e.input_fg(slot), e.input_bg(slot))
             } else {
-                (Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None)
+                (
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                )
             };
             e.set_appearance(slot, Some(sym), Some(ColorPair::new(base, bg)));
             let scene = e.scene_new(slot, name, false, None, None);
@@ -109,13 +121,25 @@ impl Effect for Highlight {
                             last_base = Some(base);
                         }
                         for &color in &spectrum {
-                            e.add_frame(scene, sym, FRAME_DURATION as i64, Some(ColorPair::new(Some(color), bg)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                scene,
+                                sym,
+                                FRAME_DURATION as i64,
+                                Some(ColorPair::new(Some(color), bg)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
                     }
                     None => {
-                        e.add_frame(scene, sym, FRAME_DURATION as i64, Some(ColorPair::new(base, bg)), 0)
-                            .map_err(other)?;
+                        e.add_frame(
+                            scene,
+                            sym,
+                            FRAME_DURATION as i64,
+                            Some(ColorPair::new(base, bg)),
+                            0,
+                        )
+                        .map_err(other)?;
                     }
                 }
             } else {
@@ -125,8 +149,19 @@ impl Effect for Highlight {
                     None => {
                         let start = frames.len() as u32;
                         let mut push = |e: &mut Engine, fg: Option<Color>| {
-                            let visual = e.visuals.make(&e.symbols, VisualInfo { sym, fg, bg, attrs: HAS_COLORS });
-                            frames.push(Frame { visual, duration: FRAME_DURATION });
+                            let visual = e.visuals.make(
+                                &e.symbols,
+                                VisualInfo {
+                                    sym,
+                                    fg,
+                                    bg,
+                                    attrs: HAS_COLORS,
+                                },
+                            );
+                            frames.push(Frame {
+                                visual,
+                                duration: FRAME_DURATION,
+                            });
                         };
                         match base {
                             Some(base) => {
@@ -145,7 +180,8 @@ impl Effect for Highlight {
                         range
                     }
                 };
-                e.add_frames_visual(scene, &frames[start as usize..end as usize]).map_err(other)?;
+                e.add_frames_visual(scene, &frames[start as usize..end as usize])
+                    .map_err(other)?;
             }
             e.set_visible(slot, true);
         }
@@ -183,7 +219,12 @@ impl Effect for Highlight {
 /// base at the configured brightness.
 fn highlight_spectrum(base: Color, config: &HighlightConfig) -> Result<Vec<Color>, EngineError> {
     let bright = Animation::adjust_color_brightness(&base, config.highlight_brightness);
-    Ok(Gradient::new(&[base, bright, bright, base], &[3, config.highlight_width, 3], false, false)
-        .map_err(other)?
-        .spectrum)
+    Ok(Gradient::new(
+        &[base, bright, bright, base],
+        &[3, config.highlight_width, 3],
+        false,
+        false,
+    )
+    .map_err(other)?
+    .spectrum)
 }

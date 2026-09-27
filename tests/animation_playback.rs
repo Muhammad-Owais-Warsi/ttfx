@@ -1,4 +1,6 @@
-use ttfx::engine::animation::{Animation, CharacterVisual, ExistingColorHandling, Scene, VisualParams};
+use ttfx::engine::animation::{
+    Animation, CharacterVisual, ExistingColorHandling, Scene, VisualParams,
+};
 use ttfx::utils::ansi::ColorCode;
 use ttfx::utils::graphics::{Color, ColorPair, Gradient};
 
@@ -11,17 +13,73 @@ fn unequal_gradients_and_symbols_follow_python_distribution() {
     // Obtained from the pinned Python reference's apply_gradient_to_symbols.
     type GradientCase = (u8, u8, u8, &'static [(char, u8, u8)]);
     let cases: &[GradientCase] = &[
-        (5, 2, 3, &[('A', 1, 20), ('A', 2, 20), ('B', 3, 20), ('B', 4, 21), ('C', 5, 21)]),
-        (2, 5, 7, &[('A', 1, 20), ('B', 1, 20), ('C', 1, 21), ('D', 1, 21), ('E', 1, 22), ('F', 2, 23), ('G', 2, 24)]),
-        (1, 1, 5, &[('A', 1, 20), ('B', 1, 20), ('C', 1, 20), ('D', 1, 20), ('E', 1, 20)]),
-        (7, 3, 2, &[('A', 1, 20), ('A', 2, 20), ('A', 3, 20), ('A', 4, 21), ('B', 5, 21), ('B', 6, 22), ('B', 7, 22)]),
+        (
+            5,
+            2,
+            3,
+            &[
+                ('A', 1, 20),
+                ('A', 2, 20),
+                ('B', 3, 20),
+                ('B', 4, 21),
+                ('C', 5, 21),
+            ],
+        ),
+        (
+            2,
+            5,
+            7,
+            &[
+                ('A', 1, 20),
+                ('B', 1, 20),
+                ('C', 1, 21),
+                ('D', 1, 21),
+                ('E', 1, 22),
+                ('F', 2, 23),
+                ('G', 2, 24),
+            ],
+        ),
+        (
+            1,
+            1,
+            5,
+            &[
+                ('A', 1, 20),
+                ('B', 1, 20),
+                ('C', 1, 20),
+                ('D', 1, 20),
+                ('E', 1, 20),
+            ],
+        ),
+        (
+            7,
+            3,
+            2,
+            &[
+                ('A', 1, 20),
+                ('A', 2, 20),
+                ('A', 3, 20),
+                ('A', 4, 21),
+                ('B', 5, 21),
+                ('B', 6, 22),
+                ('B', 7, 22),
+            ],
+        ),
     ];
     for &(fg_count, bg_count, symbol_count, expected) in cases {
-        let fg = Gradient { spectrum: (1..=fg_count).map(Color::from_xterm).collect() };
-        let bg = Gradient { spectrum: (20..20 + bg_count).map(Color::from_xterm).collect() };
-        let symbols: Vec<String> = (b'A'..b'A' + symbol_count).map(|c| (c as char).to_string()).collect();
+        let fg = Gradient {
+            spectrum: (1..=fg_count).map(Color::from_xterm).collect(),
+        };
+        let bg = Gradient {
+            spectrum: (20..20 + bg_count).map(Color::from_xterm).collect(),
+        };
+        let symbols: Vec<String> = (b'A'..b'A' + symbol_count)
+            .map(|c| (c as char).to_string())
+            .collect();
         let mut scene = scene(false);
-        scene.apply_gradient_to_symbols(&symbols, 2, Some(&fg), Some(&bg)).unwrap();
+        scene
+            .apply_gradient_to_symbols(&symbols, 2, Some(&fg), Some(&bg))
+            .unwrap();
         assert_eq!(scene.all_frames.len(), expected.len());
         assert_eq!(scene.easing_total_steps, expected.len() as i64 * 2);
         for (frame, &(symbol, foreground, background)) in scene.all_frames.iter().zip(expected) {
@@ -45,13 +103,18 @@ fn reset_restores_partially_played_frames_and_looping_order() {
     for looping in [false, true] {
         let mut scene = scene(looping);
         for (symbol, duration) in [("A", 2), ("B", 3), ("C", 1)] {
-            scene.add_frame(symbol, duration, VisualParams::default()).unwrap();
+            scene
+                .add_frame(symbol, duration, VisualParams::default())
+                .unwrap();
         }
         for symbol in ["A", "A", "B"] {
             assert_eq!(scene.get_next_visual().symbol, symbol);
         }
         scene.reset_scene();
-        assert!(scene.all_frames.iter().all(|frame| frame.ticks_elapsed == 0));
+        assert!(scene
+            .all_frames
+            .iter()
+            .all(|frame| frame.ticks_elapsed == 0));
         assert!(scene.played_frames.is_empty());
         for symbol in ["A", "A", "B", "B", "B", "C"] {
             assert_eq!(scene.get_next_visual().symbol, symbol);
@@ -70,11 +133,17 @@ fn appearance_changes_leave_held_visuals_intact_and_reuse_pooled_ones() {
     let original = animation.current_character_visual;
     animation.set_appearance("input", false, Some("λ"), None);
     assert_eq!(original.formatted_symbol.as_str(), "original");
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "λ");
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        "λ"
+    );
 
     let lambda = animation.current_character_visual;
     animation.set_appearance("input", false, Some("replacement"), None);
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "replacement");
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        "replacement"
+    );
     animation.set_appearance("input", false, Some("λ"), None);
     assert!(std::ptr::eq(animation.current_character_visual, lambda));
 }
@@ -96,7 +165,10 @@ fn reused_appearances_reset_styles_and_follow_color_mode_changes() {
             ..Default::default()
         },
     );
-    let colors = ColorPair::new(Some(Color::from_hex("Fa0088").unwrap()), Some(Color::from_hex("0A0B0C").unwrap()));
+    let colors = ColorPair::new(
+        Some(Color::from_hex("Fa0088").unwrap()),
+        Some(Color::from_hex("0A0B0C").unwrap()),
+    );
     animation.set_appearance("input", false, Some("字"), Some(colors));
     let expected = CharacterVisual::new(
         "字",
@@ -114,13 +186,24 @@ fn reused_appearances_reset_styles_and_follow_color_mode_changes() {
     );
 
     animation.use_xterm_colors = true;
-    animation.set_appearance("input", false, Some("x"), Some(ColorPair::new(Some(Color::from_xterm(1)), None)));
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "\x1b[38;5;1mx\x1b[0m");
+    animation.set_appearance(
+        "input",
+        false,
+        Some("x"),
+        Some(ColorPair::new(Some(Color::from_xterm(1)), None)),
+    );
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        "\x1b[38;5;1mx\x1b[0m"
+    );
     assert_eq!(animation.current_character_visual.bg_color_code, None);
 
     animation.no_color = true;
     animation.set_appearance("input", false, Some("z"), Some(colors));
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "z");
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        "z"
+    );
     assert_eq!(animation.current_character_visual.colors, Some(colors));
     assert_eq!(animation.current_character_visual.fg_color_code, None);
 
@@ -137,9 +220,15 @@ fn reused_appearances_reset_styles_and_follow_color_mode_changes() {
 
     let long_symbol = "🥟".repeat(40);
     animation.set_appearance("input", false, Some(&long_symbol), None);
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), long_symbol);
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        long_symbol
+    );
     animation.set_appearance("input", false, None, None);
-    assert_eq!(animation.current_character_visual.formatted_symbol.as_str(), "input");
+    assert_eq!(
+        animation.current_character_visual.formatted_symbol.as_str(),
+        "input"
+    );
 }
 
 #[test]
@@ -155,7 +244,10 @@ fn formatted_symbols_append_across_inline_and_heap_boundaries() {
                     bytes.extend_from_slice(prefix.as_bytes());
                     visual.formatted_symbol.append_to(&mut bytes);
                     visual.formatted_symbol.append_to(&mut bytes);
-                    assert_eq!(String::from_utf8(bytes).unwrap(), format!("{prefix}{text}{text}"));
+                    assert_eq!(
+                        String::from_utf8(bytes).unwrap(),
+                        format!("{prefix}{text}{text}")
+                    );
                 }
             }
         }

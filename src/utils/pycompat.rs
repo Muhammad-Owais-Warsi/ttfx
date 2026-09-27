@@ -121,7 +121,9 @@ mod tests {
         }
         let mut bits = 0x1234_5678_9abc_def0_u64;
         for _ in 0..1_000_000 {
-            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            bits = bits
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let value = f64::from_bits(bits);
             if value.is_finite() {
                 assert_eq!(round_half_even(value), previous(value), "{value}");

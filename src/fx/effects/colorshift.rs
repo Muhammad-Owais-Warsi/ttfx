@@ -31,7 +31,12 @@ pub struct ColorShift {
 
 impl ColorShift {
     pub fn new(config: ColorShiftConfig) -> Self {
-        ColorShift { config, loops: Vec::new(), gradient_scene: Vec::new(), final_scene: Vec::new() }
+        ColorShift {
+            config,
+            loops: Vec::new(),
+            gradient_scene: Vec::new(),
+            final_scene: Vec::new(),
+        }
     }
 }
 
@@ -58,8 +63,13 @@ impl Effect for ColorShift {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -69,8 +79,13 @@ impl Effect for ColorShift {
                 config.final_gradient_direction,
             )
             .map_err(other)?;
-        let gradient =
-            Gradient::new(&config.gradient_stops, &config.gradient_steps, false, !config.no_loop).map_err(other)?;
+        let gradient = Gradient::new(
+            &config.gradient_stops,
+            &config.gradient_steps,
+            false,
+            !config.no_loop,
+        )
+        .map_err(other)?;
         let spectrum = &gradient.spectrum;
         let len = spectrum.len();
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
@@ -89,7 +104,10 @@ impl Effect for ColorShift {
             HashMap::with_capacity_and_hasher(slots.min(1 << 14), FxBuild::default());
         let mut final_frames: Vec<Frame> = Vec::new();
         let mut scene_frames: Vec<Frame> = Vec::with_capacity(len);
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             e.set_visible(slot, true);
             let input_coord = e.input_coord(slot);
@@ -99,10 +117,13 @@ impl Effect for ColorShift {
                 0
             } else {
                 let direction_index = match config.travel_direction {
-                    GradientDirection::Horizontal => input_coord.column as f64 / canvas.right as f64,
+                    GradientDirection::Horizontal => {
+                        input_coord.column as f64 / canvas.right as f64
+                    }
                     GradientDirection::Vertical => input_coord.row as f64 / canvas.top as f64,
                     GradientDirection::Diagonal => {
-                        (input_coord.row + input_coord.column) as f64 / (canvas.right + canvas.top) as f64
+                        (input_coord.row + input_coord.column) as f64
+                            / (canvas.right + canvas.top) as f64
                     }
                     GradientDirection::Radial => geometry::find_normalized_distance_from_center(
                         canvas.text_bottom,
@@ -136,10 +157,18 @@ impl Effect for ColorShift {
             for i in (k..len).chain(0..k) {
                 let visual = &mut visuals[i];
                 if visual.0 == NONE {
-                    let info = VisualInfo { sym, fg: Some(spectrum[i]), bg: None, attrs: HAS_COLORS };
+                    let info = VisualInfo {
+                        sym,
+                        fg: Some(spectrum[i]),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    };
                     *visual = e.visuals.make(&e.symbols, info);
                 }
-                scene_frames.push(Frame { visual: *visual, duration: frames as u32 });
+                scene_frames.push(Frame {
+                    visual: *visual,
+                    duration: frames as u32,
+                });
             }
             e.add_frames_visual(scene, &scene_frames).map_err(other)?;
             let final_scene = e.scene_new(slot, final_name, false, None, None);
@@ -147,15 +176,19 @@ impl Effect for ColorShift {
             self.final_scene[slot as usize] = final_scene;
             let last_color = spectrum[(k + len - 1) % len];
             let pair = |c: Color| -> Result<Vec<Color>, EngineError> {
-                Ok(Gradient::with_steps(&[last_color, c], 8, false).map_err(other)?.spectrum)
+                Ok(Gradient::with_steps(&[last_color, c], 8, false)
+                    .map_err(other)?
+                    .spectrum)
             };
             if dynamic {
                 let fg = e.input_fg(slot).map(pair).transpose()?;
                 let bg = e.input_bg(slot).map(pair).transpose()?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(final_scene, &[sym], frames, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(final_scene, &[sym], frames, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(final_scene, sym, frames, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(final_scene, sym, frames, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
                 let final_color = *final_gradient_mapping.get(&input_coord).unwrap();
@@ -166,15 +199,29 @@ impl Effect for ColorShift {
                 // add_frame's visuals, appended at once
                 final_frames.clear();
                 for &color in spectrum.iter() {
-                    let info = VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS };
-                    final_frames.push(Frame { visual: e.visuals.make(&e.symbols, info), duration: frames as u32 });
+                    let info = VisualInfo {
+                        sym,
+                        fg: Some(color),
+                        bg: None,
+                        attrs: HAS_COLORS,
+                    };
+                    final_frames.push(Frame {
+                        visual: e.visuals.make(&e.symbols, info),
+                        duration: frames as u32,
+                    });
                 }
-                e.add_frames_visual(final_scene, &final_frames).map_err(other)?;
+                e.add_frames_visual(final_scene, &final_frames)
+                    .map_err(other)?;
             }
             e.activate_scene(self, slot, scene);
             e.active_insert(slot);
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(gradient_name), Action::Callback(0, 0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(gradient_name),
+                Action::Callback(0, 0),
+            )
+            .map_err(other)?;
         }
         Ok(())
     }

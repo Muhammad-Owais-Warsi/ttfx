@@ -8,8 +8,8 @@
 use std::hash::{Hash, Hasher};
 
 use crate::engine::animation::CharacterVisual;
-use crate::utils::{ansi, hexterm};
 use crate::utils::graphics::{Color, ColorPair};
+use crate::utils::{ansi, hexterm};
 
 use super::{At, Sym, Symbols};
 use crate::utils::hash::FxHasher;
@@ -103,7 +103,10 @@ const TABLE_INITIAL: usize = 1 << 15;
 
 impl Table {
     fn new() -> Self {
-        Table { entries: vec![0; TABLE_INITIAL], count: 0 }
+        Table {
+            entries: vec![0; TABLE_INITIAL],
+            count: 0,
+        }
     }
 
     /// The handle of `key`, or Err(the empty entry where it goes).
@@ -211,7 +214,11 @@ impl VisualPool {
     pub fn make_rgb(&mut self, symbols: &Symbols, sym: Sym, fg: u32, bg: u32) -> Visual {
         let word = |c: u32| if c != 0 { Color::hex_key(c) } else { 0 };
         let present = ((fg != 0) as u64) << 48 | ((bg != 0) as u64) << 49;
-        let key = Key([sym.0 as u64 | (HAS_COLORS as u64) << 32 | present, word(fg), word(bg)]);
+        let key = Key([
+            sym.0 as u64 | (HAS_COLORS as u64) << 32 | present,
+            word(fg),
+            word(bg),
+        ]);
         debug_assert_eq!(key, Key::of(&rgb_info(sym, fg, bg)));
         let hash = key.hash();
         match self.table.find(&key, hash, &self.keys) {
@@ -223,7 +230,14 @@ impl VisualPool {
     /// A new visual: `info`'s bytes formatted at the pool's end, its `key`
     /// put in the table's empty entry `at`.
     #[inline(never)]
-    fn add(&mut self, symbols: &Symbols, info: &VisualInfo, key: Key, hash: u32, at: usize) -> Visual {
+    fn add(
+        &mut self,
+        symbols: &Symbols,
+        info: &VisualInfo,
+        key: Key,
+        hash: u32,
+        at: usize,
+    ) -> Visual {
         let (no_color, xterm_colors) = (self.no_color, self.xterm_colors);
         let offset = self.bytes.len() - COPY_BLOCK;
         // formatted in place, over the slack and room made past it (a
@@ -237,12 +251,21 @@ impl VisualPool {
         } else {
             self.bytes.resize(self.bytes.len() + most, 0);
         }
-        let len = format_visual(&mut self.bytes[offset..], symbol, info, no_color, xterm_colors);
+        let len = format_visual(
+            &mut self.bytes[offset..],
+            symbol,
+            info,
+            no_color,
+            xterm_colors,
+        );
         self.bytes.truncate(offset + len + COPY_BLOCK);
         self.max_len = self.max_len.max(len);
         let handle = Visual(self.keys.len() as u32);
         self.keys.push(key);
-        self.spans.push(Span { offset: offset as u32, len: len as u32 });
+        self.spans.push(Span {
+            offset: offset as u32,
+            len: len as u32,
+        });
         self.table.insert(at, hash, handle);
         handle
     }
@@ -260,7 +283,15 @@ impl VisualPool {
     pub fn raw(&mut self, sym: Sym, bytes: &[u8]) -> Visual {
         let offset = self.begin();
         self.bytes.extend_from_slice(bytes);
-        self.finish(VisualInfo { sym, fg: None, bg: None, attrs: 0 }, offset)
+        self.finish(
+            VisualInfo {
+                sym,
+                fg: None,
+                bg: None,
+                attrs: 0,
+            },
+            offset,
+        )
     }
 
     /// Start a visual's bytes where the slack begins.
@@ -277,7 +308,10 @@ impl VisualPool {
         self.max_len = self.max_len.max(len);
         let handle = Visual(self.keys.len() as u32);
         self.keys.push(Key::of(&info));
-        self.spans.push(Span { offset: offset as u32, len: len as u32 });
+        self.spans.push(Span {
+            offset: offset as u32,
+            len: len as u32,
+        });
         handle
     }
 
@@ -294,8 +328,14 @@ impl VisualPool {
 
 /// make_rgb's fields as a VisualInfo.
 fn rgb_info(sym: Sym, fg: u32, bg: u32) -> VisualInfo {
-    let color = |c: u32| (c != 0).then(|| Color::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8));
-    VisualInfo { sym, fg: color(fg), bg: color(bg), attrs: HAS_COLORS }
+    let color =
+        |c: u32| (c != 0).then(|| Color::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8));
+    VisualInfo {
+        sym,
+        fg: color(fg),
+        bg: color(bg),
+        attrs: HAS_COLORS,
+    }
 }
 
 /// Converts the old engine's CharacterVisual (input parsing can set
@@ -323,7 +363,12 @@ pub fn info_of(symbols: &mut Symbols, visual: &CharacterVisual) -> VisualInfo {
         }
         None => (None, None),
     };
-    VisualInfo { sym: symbols.intern(&visual.symbol), fg, bg, attrs }
+    VisualInfo {
+        sym: symbols.intern(&visual.symbol),
+        fg,
+        bg,
+        attrs,
+    }
 }
 
 /// CharacterVisual.format_symbol_into for these fields: the SGR attributes
@@ -331,7 +376,13 @@ pub fn info_of(symbols: &mut Symbols, visual: &CharacterVisual) -> VisualInfo {
 /// symbol, and a reset when anything came before it: written from the start
 /// of `out`, which has room for SGR_MAX + the symbol + the reset; returns
 /// the length.
-fn format_visual(out: &mut [u8], symbol: &[u8], info: &VisualInfo, no_color: bool, xterm: bool) -> usize {
+fn format_visual(
+    out: &mut [u8],
+    symbol: &[u8],
+    info: &VisualInfo,
+    no_color: bool,
+    xterm: bool,
+) -> usize {
     debug_assert_eq!(RESET, ansi::RESET_ALL.as_bytes());
     let mut sgr = Sgr { buf: out, len: 0 };
     for (bit, code) in [
@@ -404,7 +455,9 @@ impl Sgr<'_> {
         self.put(b"\x1b[");
         self.put(location);
         if xterm {
-            let code = color.xterm_color.unwrap_or_else(|| hexterm::hex_to_xterm(&color.rgb_color));
+            let code = color
+                .xterm_color
+                .unwrap_or_else(|| hexterm::hex_to_xterm(&color.rgb_color));
             self.put(b";5;");
             self.decimal(code);
         } else {
@@ -435,7 +488,11 @@ static DECIMAL: [([u8; 3], u8); 256] = {
     let mut t = [([0u8; 3], 0u8); 256];
     let mut v = 0;
     while v < 256 {
-        let (h, d, u) = (b'0' + (v / 100) as u8, b'0' + (v / 10 % 10) as u8, b'0' + (v % 10) as u8);
+        let (h, d, u) = (
+            b'0' + (v / 100) as u8,
+            b'0' + (v / 10 % 10) as u8,
+            b'0' + (v % 10) as u8,
+        );
         t[v] = if v >= 100 {
             ([h, d, u], 3)
         } else if v >= 10 {
@@ -468,7 +525,12 @@ mod tests {
         for fg in colors {
             for bg in colors {
                 for attrs in [0, BOLD | HAS_COLORS, HAS_COLORS | STRIKE | DIM, 0x1ff] {
-                    let info = VisualInfo { sym: Sym(123_456), fg, bg, attrs };
+                    let info = VisualInfo {
+                        sym: Sym(123_456),
+                        fg,
+                        bg,
+                        attrs,
+                    };
                     assert_eq!(format!("{:?}", Key::of(&info).info()), format!("{info:?}"));
                 }
             }

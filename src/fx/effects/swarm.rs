@@ -85,14 +85,22 @@ impl Swarm {
     /// and cut into runs of `size`; a final run shorter than size // 2 joins
     /// the one before.
     fn make_swarms(&mut self, e: &mut Engine, size: i64) {
-        let mut order = e.get_characters(CharacterFilter::default(), CharacterSort::BottomToTopRightToLeft);
+        let mut order = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::BottomToTopRightToLeft,
+        );
         order.reverse();
         let size = size as usize;
-        let mut bounds: Vec<(usize, usize)> =
-            (0..order.len()).step_by(size).map(|start| (start, (start + size).min(order.len()))).collect();
+        let mut bounds: Vec<(usize, usize)> = (0..order.len())
+            .step_by(size)
+            .map(|start| (start, (start + size).min(order.len())))
+            .collect();
         let (start, end) = bounds.pop().expect("make_swarms: no swarms");
         if ((end - start) as i64) < floor_div(size as i64, 2) {
-            bounds.last_mut().expect("upstream IndexError: no preceding swarm to merge into").1 = end;
+            bounds
+                .last_mut()
+                .expect("upstream IndexError: no preceding swarm to merge into")
+                .1 = end;
         } else {
             bounds.push((start, end));
         }
@@ -120,12 +128,22 @@ impl Effect for Swarm {
         // SwarmIterator.DYNAMIC_CLEAR_COLOR
         let dynamic_clear_color = Color::from_hex("#ffffff").unwrap();
         let flash = config.flash_color;
-        let count = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight).len();
+        let count = e
+            .get_characters(
+                CharacterFilter::default(),
+                CharacterSort::TopToBottomLeftToRight,
+            )
+            .len();
         let swarm_size = round_half_even(count as f64 * config.swarm_size).max(1);
         self.make_swarms(e, swarm_size);
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -139,7 +157,9 @@ impl Effect for Swarm {
         let radius = (floor_div(canvas.right.min(canvas.top), 2)).max(1);
         let diameter = (floor_div(canvas.right.min(canvas.top), 6)).max(1) * 2;
         let flash_spectrum = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[flash, c], 10, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[flash, c], 10, false)
+                .map_err(other)?
+                .spectrum)
         };
 
         let mut circles: Vec<Circle> = Vec::new();
@@ -167,7 +187,10 @@ impl Effect for Swarm {
             flash_memo.clear();
 
             let spawn = canvas.random_coord(&mut e.rng, true, false);
-            let area_count = e.rng.randint(config.swarm_area_count_range.0, config.swarm_area_count_range.1);
+            let area_count = e.rng.randint(
+                config.swarm_area_count_range.0,
+                config.swarm_area_count_range.1,
+            );
             areas.clear();
             let mut last_focus = spawn;
             let mut made = 0;
@@ -217,14 +240,21 @@ impl Effect for Swarm {
                 let input = e.input_coord(slot);
                 e.set_coordinate(slot, spawn);
                 self.first_path.push(e.paths.recs.len() as u32);
-                let flash_scene = e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
+                let flash_scene =
+                    e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
                 let plain = e.scene(flash_scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                 match flash_memo.get(&sym) {
                     Some(frames) if plain => e.append_frames(flash_scene, frames),
                     _ => {
                         for &step in &mirror {
-                            e.add_frame(flash_scene, sym, 1, Some(ColorPair::new(Some(step), None)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                flash_scene,
+                                sym,
+                                1,
+                                Some(ColorPair::new(Some(step), None)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
                         if plain {
                             flash_memo.insert(sym, e.scenes.frames_of(flash_scene).to_vec());
@@ -235,42 +265,89 @@ impl Effect for Swarm {
                     let name = area_names[a];
                     let inside = &circles[circle as usize].inside;
                     let origin = inside[e.rng.choice_index(inside.len())];
-                    let path = e.path_new(slot, 0.4, Some(Easing::OutSine), None, 0, false, name).map_err(other)?;
-                    e.path_new_waypoint(path, origin, None, name).map_err(other)?;
-                    e.register_event(slot, Event::PathActivated, Caller::Path(name), Action::ActivateScene(FLASH_SCENE))
+                    let path = e
+                        .path_new(slot, 0.4, Some(Easing::OutSine), None, 0, false, name)
                         .map_err(other)?;
-                    e.register_event(slot, Event::PathActivated, Caller::Path(name), Action::SetLayer(1))
+                    e.path_new_waypoint(path, origin, None, name)
                         .map_err(other)?;
-                    e.register_event(slot, Event::PathComplete, Caller::Path(name), Action::DeactivateScene(None))
-                        .map_err(other)?;
+                    e.register_event(
+                        slot,
+                        Event::PathActivated,
+                        Caller::Path(name),
+                        Action::ActivateScene(FLASH_SCENE),
+                    )
+                    .map_err(other)?;
+                    e.register_event(
+                        slot,
+                        Event::PathActivated,
+                        Caller::Path(name),
+                        Action::SetLayer(1),
+                    )
+                    .map_err(other)?;
+                    e.register_event(
+                        slot,
+                        Event::PathComplete,
+                        Caller::Path(name),
+                        Action::DeactivateScene(None),
+                    )
+                    .map_err(other)?;
                     for inner in [3 * a + 1, 3 * a + 2] {
                         let next = inside[e.rng.choice_index(inside.len())];
                         let path = e
-                            .path_new(slot, 0.18, Some(Easing::InOutSine), None, 0, false, Name::auto(inner))
+                            .path_new(
+                                slot,
+                                0.18,
+                                Some(Easing::InOutSine),
+                                None,
+                                0,
+                                false,
+                                Name::auto(inner),
+                            )
                             .map_err(other)?;
-                        e.path_new_waypoint(path, next, None, Name::auto(inner + 1)).map_err(other)?;
+                        e.path_new_waypoint(path, next, None, Name::auto(inner + 1))
+                            .map_err(other)?;
                     }
                 }
                 // the landing path and scene
-                let path =
-                    e.path_new(slot, 0.45, Some(Easing::InOutQuad), None, 0, false, Name::NONE).map_err(other)?;
-                e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+                let path = e
+                    .path_new(
+                        slot,
+                        0.45,
+                        Some(Easing::InOutQuad),
+                        None,
+                        0,
+                        false,
+                        Name::NONE,
+                    )
+                    .map_err(other)?;
+                e.path_new_waypoint(path, input, None, Name::NONE)
+                    .map_err(other)?;
                 let land_scene = e.scene_new(slot, Name::NONE, false, None, None);
                 if dynamic {
                     let (fg, bg) = (e.input_fg(slot), e.input_bg(slot));
                     if fg.is_none() && bg.is_none() {
                         for step in flash_spectrum(dynamic_clear_color)? {
-                            e.add_frame(land_scene, sym, 3, Some(ColorPair::new(Some(step), None)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                land_scene,
+                                sym,
+                                3,
+                                Some(ColorPair::new(Some(step), None)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
-                        e.add_frame(land_scene, sym, 3, Some(ColorPair::default()), 0).map_err(other)?;
+                        e.add_frame(land_scene, sym, 3, Some(ColorPair::default()), 0)
+                            .map_err(other)?;
                     } else {
                         let fg = fg.map(flash_spectrum).transpose()?;
                         let bg = bg.map(flash_spectrum).transpose()?;
-                        e.apply_gradient(land_scene, &[sym], 3, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                        e.apply_gradient(land_scene, &[sym], 3, fg.as_deref(), bg.as_deref())
+                            .map_err(other)?;
                     }
                 } else {
-                    let final_fg = *final_gradient_mapping.get(&input).expect("gradient mapping fg");
+                    let final_fg = *final_gradient_mapping
+                        .get(&input)
+                        .expect("gradient mapping fg");
                     let plain = e.scene(land_scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                     match land_memo.get(&(sym, final_fg)) {
                         Some(frames) if plain => e.append_frames(land_scene, frames),
@@ -280,21 +357,45 @@ impl Effect for Swarm {
                                 Entry::Vacant(v) => v.insert(flash_spectrum(final_fg)?),
                             };
                             for &step in spectrum.iter() {
-                                e.add_frame(land_scene, sym, 3, Some(ColorPair::new(Some(step), None)), 0)
-                                    .map_err(other)?;
+                                e.add_frame(
+                                    land_scene,
+                                    sym,
+                                    3,
+                                    Some(ColorPair::new(Some(step), None)),
+                                    0,
+                                )
+                                .map_err(other)?;
                             }
                             if plain {
-                                land_memo.insert((sym, final_fg), e.scenes.frames_of(land_scene).to_vec());
+                                land_memo.insert(
+                                    (sym, final_fg),
+                                    e.scenes.frames_of(land_scene).to_vec(),
+                                );
                             }
                         }
                     }
                 }
-                e.register_event(slot, Event::PathComplete, Caller::Path(landing), Action::ActivateScene(LAND_SCENE))
-                    .map_err(other)?;
-                e.register_event(slot, Event::PathComplete, Caller::Path(landing), Action::SetLayer(0))
-                    .map_err(other)?;
-                e.register_event(slot, Event::PathActivated, Caller::Path(landing), Action::ActivateScene(FLASH_SCENE))
-                    .map_err(other)?;
+                e.register_event(
+                    slot,
+                    Event::PathComplete,
+                    Caller::Path(landing),
+                    Action::ActivateScene(LAND_SCENE),
+                )
+                .map_err(other)?;
+                e.register_event(
+                    slot,
+                    Event::PathComplete,
+                    Caller::Path(landing),
+                    Action::SetLayer(0),
+                )
+                .map_err(other)?;
+                e.register_event(
+                    slot,
+                    Event::PathActivated,
+                    Caller::Path(landing),
+                    Action::ActivateScene(FLASH_SCENE),
+                )
+                .map_err(other)?;
                 e.chain_paths(slot, &chain, false).map_err(other)?;
             }
         }

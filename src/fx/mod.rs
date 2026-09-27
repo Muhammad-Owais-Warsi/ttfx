@@ -30,7 +30,9 @@ use crate::engine::animation::ExistingColorHandling;
 use crate::engine::canvas::Canvas;
 use crate::engine::ctx::Clock;
 use crate::engine::error::EngineError;
-use crate::engine::terminal::{CharacterFilter, CharacterGroup, CharacterSort, ColorSort, Terminal, TerminalConfig};
+use crate::engine::terminal::{
+    CharacterFilter, CharacterGroup, CharacterSort, ColorSort, Terminal, TerminalConfig,
+};
 use crate::utils::geometry::Coord;
 use crate::utils::graphics::Color;
 use crate::utils::rng::Rng;
@@ -116,7 +118,11 @@ pub struct Symbols {
 
 impl Default for Symbols {
     fn default() -> Self {
-        Symbols { strings: Vec::new(), map: HashMap::default(), ascii: [0; 128] }
+        Symbols {
+            strings: Vec::new(),
+            map: HashMap::default(),
+            ascii: [0; 128],
+        }
     }
 }
 
@@ -243,7 +249,12 @@ pub struct Neighbors {
 }
 
 impl Neighbors {
-    const NONE: Neighbors = Neighbors { north: NONE, east: NONE, south: NONE, west: NONE };
+    const NONE: Neighbors = Neighbors {
+        north: NONE,
+        east: NONE,
+        south: NONE,
+        west: NONE,
+    };
 }
 
 /// The character store: one array per field, indexed by slot.
@@ -343,7 +354,12 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(input_data: &str, config: TerminalConfig, rng: Rng, clock: Clock) -> Result<Self, EngineError> {
+    pub fn new(
+        input_data: &str,
+        config: TerminalConfig,
+        rng: Rng,
+        clock: Clock,
+    ) -> Result<Self, EngineError> {
         let (terminal, chars) = Terminal::parse(input_data, config.clone())?;
         let mut symbols = Symbols::default();
         let mut visuals = visual::VisualPool::new(config.no_color, config.xterm_colors);
@@ -358,9 +374,22 @@ impl Engine {
             let s = symbols.intern_char(c.symbol);
             let v = if always && c.uses_preexisting_colors {
                 let attrs = visual::HAS_COLORS | if c.bold { visual::BOLD } else { 0 };
-                visuals.make(&symbols, VisualInfo { sym: s, fg: c.fg, bg: c.bg, attrs })
+                visuals.make(
+                    &symbols,
+                    VisualInfo {
+                        sym: s,
+                        fg: c.fg,
+                        bg: c.bg,
+                        attrs,
+                    },
+                )
             } else {
-                let info = VisualInfo { sym: s, fg: None, bg: None, attrs: 0 };
+                let info = VisualInfo {
+                    sym: s,
+                    fg: None,
+                    bg: None,
+                    attrs: 0,
+                };
                 match plain.get_mut(c.symbol as usize) {
                     Some(v) if v.0 != NONE => *v,
                     Some(v) => {
@@ -391,7 +420,11 @@ impl Engine {
             flags: chars
                 .iter()
                 .map(|c| {
-                    (if c.uses_preexisting_colors { CF_PREEXISTING } else { 0 }) | if c.bold { CF_BOLD } else { 0 }
+                    (if c.uses_preexisting_colors {
+                        CF_PREEXISTING
+                    } else {
+                        0
+                    }) | if c.bold { CF_BOLD } else { 0 }
                 })
                 .collect(),
             fg: chars.iter().map(|c| c.fg).collect(),
@@ -418,7 +451,9 @@ impl Engine {
                 };
             }
         }
-        let slots = |ids: &[crate::engine::character::CharId]| ids.iter().map(|id| id.0).collect::<Vec<u32>>();
+        let slots = |ids: &[crate::engine::character::CharId]| {
+            ids.iter().map(|id| id.0).collect::<Vec<u32>>()
+        };
         let input_chars = slots(&terminal.input_characters);
         let inner_fill_chars = slots(&terminal.inner_fill_characters);
         let outer_fill_chars = slots(&terminal.outer_fill_characters);
@@ -431,8 +466,9 @@ impl Engine {
         for &s in &outer_fill_chars {
             ch.flags[s as usize] |= CF_FILL_OUTER;
         }
-        let preexisting_colors_present =
-            input_chars.iter().any(|&s| ch.fg[s as usize].is_some() || ch.bg[s as usize].is_some());
+        let preexisting_colors_present = input_chars
+            .iter()
+            .any(|&s| ch.fg[s as usize].is_some() || ch.bg[s as usize].is_some());
         let render = render::Front::new(&terminal, &mut visuals, &mut symbols);
         let next_character_id = terminal.next_character_id;
         let input_colors_frequency = terminal.input_colors_frequency.0.clone();
@@ -586,7 +622,12 @@ impl Engine {
         }
         let mut visual = self.plain_visuals[i];
         if visual.0 == NONE {
-            let info = VisualInfo { sym, fg: None, bg: None, attrs: 0 };
+            let info = VisualInfo {
+                sym,
+                fg: None,
+                bg: None,
+                attrs: 0,
+            };
             visual = self.visuals.make(&self.symbols, info);
             self.plain_visuals[i] = visual;
         }
@@ -600,7 +641,9 @@ impl Engine {
     }
 
     pub fn char_at_input_coord(&self, coord: Coord) -> Option<u32> {
-        canvas_index(&self.canvas, coord).map(|i| self.by_input_coord[i]).filter(|&s| s != NONE)
+        canvas_index(&self.canvas, coord)
+            .map(|i| self.by_input_coord[i])
+            .filter(|&s| s != NONE)
     }
 
     pub fn collect_characters(&self, filter: CharacterFilter) -> Vec<u32> {
@@ -680,8 +723,16 @@ impl Engine {
             return None;
         }
         let mask = if filter.input_chars { CF_INPUT } else { 0 }
-            | if filter.inner_fill_chars { CF_FILL_INNER } else { 0 }
-            | if filter.outer_fill_chars { CF_FILL_OUTER } else { 0 };
+            | if filter.inner_fill_chars {
+                CF_FILL_INNER
+            } else {
+                0
+            }
+            | if filter.outer_fill_chars {
+                CF_FILL_OUTER
+            } else {
+                0
+            };
         let width = self.canvas.right.max(0) as usize;
         let mut all = Vec::with_capacity(self.by_input_coord.len());
         if width > 0 {
@@ -697,7 +748,11 @@ impl Engine {
     }
 
     /// Terminal.get_characters_grouped.
-    pub fn get_characters_grouped(&self, filter: CharacterFilter, grouping: CharacterGroup) -> Vec<Vec<u32>> {
+    pub fn get_characters_grouped(
+        &self,
+        filter: CharacterFilter,
+        grouping: CharacterGroup,
+    ) -> Vec<Vec<u32>> {
         let mut all = self.collect_characters(filter);
         let ic = &self.ch.input_coord;
         all.sort_by_key(|&s| {
@@ -713,14 +768,19 @@ impl Engine {
             CharacterGroup::RowBottomToTop | CharacterGroup::RowTopToBottom => {
                 ordered_buckets(all, 0, canvas.top, |s| coord(s).row)
             }
-            CharacterGroup::DiagonalBottomLeftToTopRight | CharacterGroup::DiagonalTopRightToBottomLeft => {
-                ordered_buckets(all, 0, canvas.top + canvas.right, |s| coord(s).row + coord(s).column)
-            }
-            CharacterGroup::DiagonalTopLeftToBottomRight | CharacterGroup::DiagonalBottomRightToTopLeft => {
-                ordered_buckets(all, canvas.left - canvas.top, canvas.right - canvas.bottom, |s| {
-                    coord(s).column - coord(s).row
+            CharacterGroup::DiagonalBottomLeftToTopRight
+            | CharacterGroup::DiagonalTopRightToBottomLeft => {
+                ordered_buckets(all, 0, canvas.top + canvas.right, |s| {
+                    coord(s).row + coord(s).column
                 })
             }
+            CharacterGroup::DiagonalTopLeftToBottomRight
+            | CharacterGroup::DiagonalBottomRightToTopLeft => ordered_buckets(
+                all,
+                canvas.left - canvas.top,
+                canvas.right - canvas.bottom,
+                |s| coord(s).column - coord(s).row,
+            ),
             CharacterGroup::CenterToOutside | CharacterGroup::OutsideToCenter => {
                 let center = canvas.text_center;
                 let distance = |s: u32| {
@@ -735,7 +795,8 @@ impl Engine {
                 {
                     ordered_buckets(all, 0, max_distance.unwrap(), distance)
                 } else {
-                    let mut by_distance: Vec<(i64, u32)> = all.iter().map(|&s| (distance(s), s)).collect();
+                    let mut by_distance: Vec<(i64, u32)> =
+                        all.iter().map(|&s| (distance(s), s)).collect();
                     by_distance.sort_by_key(|&(d, _)| d);
                     let mut groups: Vec<Vec<u32>> = Vec::new();
                     let mut last = None;
@@ -785,11 +846,17 @@ fn canvas_index(canvas: &Canvas, coord: Coord) -> Option<usize> {
         .then(|| ((coord.row - 1) * canvas.right + (coord.column - 1)) as usize)
 }
 
-fn ordered_buckets(characters: Vec<u32>, first_key: i64, last_key: i64, key: impl Fn(u32) -> i64) -> Vec<Vec<u32>> {
+fn ordered_buckets(
+    characters: Vec<u32>,
+    first_key: i64,
+    last_key: i64,
+    key: impl Fn(u32) -> i64,
+) -> Vec<Vec<u32>> {
     if first_key > last_key {
         return Vec::new();
     }
-    let bucket_count = usize::try_from(last_key - first_key + 1).expect("terminal canvas is too large");
+    let bucket_count =
+        usize::try_from(last_key - first_key + 1).expect("terminal canvas is too large");
     let mut buckets: Vec<Vec<u32>> = vec![Vec::new(); bucket_count];
     for s in characters {
         let k = key(s);

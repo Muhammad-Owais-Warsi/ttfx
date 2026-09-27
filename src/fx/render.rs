@@ -160,7 +160,11 @@ struct Row {
 
 impl Row {
     fn new(blocks: usize) -> Self {
-        Row { bytes: Vec::new(), len: 0, offs: vec![0; blocks + 1 + OFFS_RUN] }
+        Row {
+            bytes: Vec::new(),
+            len: 0,
+            offs: vec![0; blocks + 1 + OFFS_RUN],
+        }
     }
 }
 
@@ -226,7 +230,13 @@ impl Render {
             stride,
             owner: vec![NONE; cells],
             cell_span: vec![blank; cells],
-            rec: vec![CellRec { head: NONE, layer: 0 }; cells],
+            rec: vec![
+                CellRec {
+                    head: NONE,
+                    layer: 0
+                };
+                cells
+            ],
             link: Vec::new(),
             back: Vec::new(),
             visual: Vec::new(),
@@ -271,8 +281,20 @@ impl Render {
             self.spans.extend_from_slice(spans);
         }
         if self.link.len() < slots {
-            self.link.resize(slots, Link { next: NONE, layer: 0 });
-            self.back.resize(slots, Back { prev: NONE, cell: NONE });
+            self.link.resize(
+                slots,
+                Link {
+                    next: NONE,
+                    layer: 0,
+                },
+            );
+            self.back.resize(
+                slots,
+                Back {
+                    prev: NONE,
+                    cell: NONE,
+                },
+            );
             self.visual.resize(slots, 0);
         }
     }
@@ -304,8 +326,11 @@ impl Render {
     pub(super) fn settle_late(&mut self) {
         for &cell in &self.late {
             let owner = *self.owner.at(cell);
-            *self.cell_span.at_mut(cell) =
-                if owner == NONE { self.blank } else { *self.spans.at(*self.visual.at(owner)) };
+            *self.cell_span.at_mut(cell) = if owner == NONE {
+                self.blank
+            } else {
+                *self.spans.at(*self.visual.at(owner))
+            };
         }
         self.late.clear();
     }
@@ -323,8 +348,10 @@ impl Render {
     #[cold]
     #[inline(never)]
     fn reserve_room(&mut self, room: (usize, usize)) {
-        self.spans.reserve_exact(room.0.saturating_sub(self.spans.len()));
-        self.bytes.reserve_exact(room.1.saturating_sub(self.bytes.len()));
+        self.spans
+            .reserve_exact(room.0.saturating_sub(self.spans.len()));
+        self.bytes
+            .reserve_exact(room.1.saturating_sub(self.bytes.len()));
     }
 
     #[cold]
@@ -484,15 +511,21 @@ impl Grid<'_> {
         }
         *self.owner.at_mut(cell) = best;
         self.rec.at_mut(cell).layer = best_layer;
-        *self.cell_span.at_mut(cell) =
-            if best == NONE { self.blank } else { *self.spans.at(*self.visual.at(best)) };
+        *self.cell_span.at_mut(cell) = if best == NONE {
+            self.blank
+        } else {
+            *self.spans.at(*self.visual.at(best))
+        };
         self.mark(cell);
     }
 }
 
 /// The pool's visuals from span `spans` and content byte `bytes` on.
 pub(super) fn pool_delta(pool: &VisualPool, spans: usize, bytes: usize) -> (&[Span], &[u8]) {
-    (&pool.spans[spans..], &pool.bytes[bytes..pool.bytes.len() - COPY_BLOCK])
+    (
+        &pool.spans[spans..],
+        &pool.bytes[bytes..pool.bytes.len() - COPY_BLOCK],
+    )
 }
 
 /// The pool's capacity (spans, bytes) for `Render::fit`.
@@ -536,7 +569,12 @@ impl Engine {
         let (sym, current) = (&self.ch.sym[..], &mut self.ch.visual[..]);
         let spans = &r.spans[..];
         let shift = r.stride_shift;
-        let (owner, cell_span, back, shown) = (&r.owner[..], &mut r.cell_span[..], &r.back[..], &mut r.visual[..]);
+        let (owner, cell_span, back, shown) = (
+            &r.owner[..],
+            &mut r.cell_span[..],
+            &r.back[..],
+            &mut r.visual[..],
+        );
         let (dirty, row_dirty) = (&mut r.dirty[..], &mut r.row_dirty[..]);
         for &slot in slots {
             let visual = visual_of(*sym.at(slot));
@@ -623,7 +661,11 @@ impl Engine {
 
     /// Replay the frame's log and bring the rows up to date, on this thread.
     pub fn render_here(&mut self) {
-        let r = self.render.back.as_mut().expect("the renderer runs on another thread");
+        let r = self
+            .render
+            .back
+            .as_mut()
+            .expect("the renderer runs on another thread");
         let (spans, bytes) = pool_delta(&self.visuals, r.spans.len(), r.bytes.len() - COPY_BLOCK);
         r.fit(pool_room(&self.visuals));
         r.sync(spans, bytes, self.ch.len());
@@ -635,7 +677,10 @@ impl Engine {
 
     /// The renderer, when it runs on this thread.
     pub fn renderer(&self) -> &Render {
-        self.render.back.as_ref().expect("the renderer runs on another thread")
+        self.render
+            .back
+            .as_ref()
+            .expect("the renderer runs on another thread")
     }
 }
 
@@ -767,7 +812,14 @@ impl Render {
                     shift_offs(&mut current.offs, e, blocks + 1, delta);
                 }
                 let keep = start + n;
-                let len = emit(pool, &cells[..end], &mut current.bytes, &mut current.offs, b, start);
+                let len = emit(
+                    pool,
+                    &cells[..end],
+                    &mut current.bytes,
+                    &mut current.offs,
+                    b,
+                    start,
+                );
                 debug_assert_eq!(len, keep);
                 store(&mut current.bytes, keep, saved);
             }
@@ -781,7 +833,12 @@ impl Render {
     }
 
     /// The frame, top row first, between `prefix` and `suffix`, as iovec parts.
-    pub fn frame_parts<'a>(&'a self, prefix: &'a [u8], suffix: &'a [u8], parts: &mut Vec<IoSlice<'a>>) {
+    pub fn frame_parts<'a>(
+        &'a self,
+        prefix: &'a [u8],
+        suffix: &'a [u8],
+        parts: &mut Vec<IoSlice<'a>>,
+    ) {
         parts.clear();
         if !prefix.is_empty() {
             parts.push(IoSlice::new(prefix));
@@ -988,7 +1045,10 @@ fn copy_clean(prev: &Row, next: &mut Row, from: usize, to: usize, len: usize) ->
     // SAFETY: both buffers hold the run rounded up to whole COPY_BLOCKs:
     // every buffer keeps ROW_SLACK past its longest content.
     unsafe {
-        let (src, dst) = (prev.bytes.as_ptr().add(start), next.bytes.as_mut_ptr().add(len));
+        let (src, dst) = (
+            prev.bytes.as_ptr().add(start),
+            next.bytes.as_mut_ptr().add(len),
+        );
         let mut i = 0;
         while i < run {
             copy_block(src.add(i), dst.add(i));
@@ -1016,7 +1076,14 @@ fn shift_offs(offs: &mut [u32], from: usize, to: usize, delta: u32) {
 /// every block's start; returns the new length. A block whose visuals are all
 /// shorter than 32 bytes is four fixed 32-byte copies.
 #[inline(always)]
-fn emit(pool: &[u8], cells: &[Span], out: &mut [u8], offs: &mut [u32], first_block: usize, mut len: usize) -> usize {
+fn emit(
+    pool: &[u8],
+    cells: &[Span],
+    out: &mut [u8],
+    offs: &mut [u32],
+    first_block: usize,
+    mut len: usize,
+) -> usize {
     let mut c = first_block * BLOCK;
     let mut b = first_block;
     let out = out.as_mut_ptr();
@@ -1028,7 +1095,12 @@ fn emit(pool: &[u8], cells: &[Span], out: &mut [u8], offs: &mut [u32], first_blo
         while c + BLOCK <= cells.len() {
             *offs.at_mut(b) = len as u32;
             b += 1;
-            let q = [*cells.at(c), *cells.at(c + 1), *cells.at(c + 2), *cells.at(c + 3)];
+            let q = [
+                *cells.at(c),
+                *cells.at(c + 1),
+                *cells.at(c + 2),
+                *cells.at(c + 3),
+            ];
             if (q[0].len | q[1].len | q[2].len | q[3].len) < 32 {
                 for s in q {
                     copy32(pool.add(s.offset as usize), out.add(len));
@@ -1076,7 +1148,12 @@ unsafe fn emit_cell(pool: *const u8, s: Span, out: *mut u8, len: usize) -> usize
 #[inline(always)]
 unsafe fn copy32(src: *const u8, dst: *mut u8) {
     // SAFETY: the caller's contract; the accesses are unaligned.
-    unsafe { std::ptr::write_unaligned(dst as *mut [u8; 32], std::ptr::read_unaligned(src as *const [u8; 32])) }
+    unsafe {
+        std::ptr::write_unaligned(
+            dst as *mut [u8; 32],
+            std::ptr::read_unaligned(src as *const [u8; 32]),
+        )
+    }
 }
 
 /// Copy COPY_BLOCK bytes: a visual of any usual length.
@@ -1087,7 +1164,12 @@ unsafe fn copy32(src: *const u8, dst: *mut u8) {
 unsafe fn copy_block(src: *const u8, dst: *mut u8) {
     const _: () = assert!(COPY_BLOCK == 64);
     // SAFETY: the caller's contract; the accesses are unaligned.
-    unsafe { std::ptr::write_unaligned(dst as *mut [u8; 64], std::ptr::read_unaligned(src as *const [u8; 64])) }
+    unsafe {
+        std::ptr::write_unaligned(
+            dst as *mut [u8; 64],
+            std::ptr::read_unaligned(src as *const [u8; 64]),
+        )
+    }
 }
 
 #[cold]
@@ -1154,11 +1236,16 @@ mod chunk_tests {
         for _ in 0..10_000 {
             let mut chunk = [0u8; 64];
             for b in &mut chunk {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 // mostly zero, so blocks come out both clean and dirty
                 *b = if x >> 60 == 0 { (x >> 32) as u8 | 1 } else { 0 };
             }
-            let want = chunk.chunks_exact(4).enumerate().fold(0u32, |m, (i, c)| m | ((c != [0; 4]) as u32) << i);
+            let want = chunk
+                .chunks_exact(4)
+                .enumerate()
+                .fold(0u32, |m, (i, c)| m | ((c != [0; 4]) as u32) << i);
             assert_eq!(chunk_blocks(&mut chunk), want);
             assert_eq!(chunk, [0; 64]);
         }

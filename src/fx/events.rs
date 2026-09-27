@@ -116,7 +116,13 @@ impl Engine {
 
     /// EventHandler.register_event: callers and targets that name a path or
     /// scene must exist, and an identical registration is an error.
-    pub fn register_event(&mut self, slot: u32, event: Event, caller: Caller, action: Action) -> Result<(), String> {
+    pub fn register_event(
+        &mut self,
+        slot: u32,
+        event: Event,
+        caller: Caller,
+        action: Action,
+    ) -> Result<(), String> {
         match caller {
             Caller::Path(name) if self.path_find(slot, name).is_none() => {
                 return Err(format!("path not found: {}", self.names.to_string(name)));
@@ -127,7 +133,9 @@ impl Engine {
             _ => {}
         }
         match action {
-            Action::ActivatePath(name) | Action::DeactivatePath(Some(name)) if self.path_find(slot, name).is_none() => {
+            Action::ActivatePath(name) | Action::DeactivatePath(Some(name))
+                if self.path_find(slot, name).is_none() =>
+            {
                 return Err(format!("path not found: {}", self.names.to_string(name)));
             }
             Action::ActivateScene(name) | Action::DeactivateScene(Some(name))
@@ -143,7 +151,11 @@ impl Engine {
                 let mut a = self.events.entries[e as usize].first;
                 while a != NONE {
                     if self.events.actions[a as usize].action == action {
-                        return Err(format!("duplicate event registration: {:?} {:?}", (event, caller), action));
+                        return Err(format!(
+                            "duplicate event registration: {:?} {:?}",
+                            (event, caller),
+                            action
+                        ));
                     }
                     a = self.events.actions[a as usize].next;
                 }
@@ -156,7 +168,14 @@ impl Engine {
                 self.events.actions.push(ActionNode { action, next: NONE });
                 let id = self.events.entries.len() as u32;
                 let key = entry_key(event, caller);
-                self.events.entries.push(Entry { next: NONE, tail: id, key, caller, first: node, last: node });
+                self.events.entries.push(Entry {
+                    next: NONE,
+                    tail: id,
+                    key,
+                    caller,
+                    first: node,
+                    last: node,
+                });
                 // append, keeping registration order
                 let head = self.ch.events[slot as usize];
                 if head == NONE {
@@ -185,7 +204,9 @@ impl Engine {
             let action = self.events.actions[a as usize].action;
             match action {
                 Action::ActivatePath(name) => {
-                    let path = self.path_find(slot, name).expect("activate_path: path not found");
+                    let path = self
+                        .path_find(slot, name)
+                        .expect("activate_path: path not found");
                     self.activate_path(hooks, slot, path);
                 }
                 Action::ActivateScene(name) => self.activate_scene_name(hooks, slot, name),
@@ -216,7 +237,12 @@ impl Engine {
             return Ok(());
         }
         for pair in paths.windows(2) {
-            self.register_event(slot, Event::PathComplete, Caller::Path(pair[0]), Action::ActivatePath(pair[1]))?;
+            self.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(pair[0]),
+                Action::ActivatePath(pair[1]),
+            )?;
         }
         if looping {
             self.register_event(

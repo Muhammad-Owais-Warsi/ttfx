@@ -78,7 +78,14 @@ impl Rng {
     }
 
     pub fn from_state(s: [u64; 4]) -> Self {
-        Rng { s, start: s, batch: Box::new([0; BATCH]), pos: BATCH, lanes: None, avx512: avx512_available() }
+        Rng {
+            s,
+            start: s,
+            batch: Box::new([0; BATCH]),
+            pos: BATCH,
+            lanes: None,
+            avx512: avx512_available(),
+        }
     }
 
     /// Core generator: xoshiro256++ next().
@@ -175,8 +182,16 @@ impl Rng {
             ];
             for (v, lo, hi) in quads {
                 // lane blocks are LANE draws and j + 4 <= LANE
-                store_si256(&mut self.batch[..], lo * LANE + j, _mm512_castsi512_si256(v));
-                store_si256(&mut self.batch[..], hi * LANE + j, _mm512_extracti64x4_epi64::<1>(v));
+                store_si256(
+                    &mut self.batch[..],
+                    lo * LANE + j,
+                    _mm512_castsi512_si256(v),
+                );
+                store_si256(
+                    &mut self.batch[..],
+                    hi * LANE + j,
+                    _mm512_extracti64x4_epi64::<1>(v),
+                );
             }
         }
         let mut lanes = [[0u64; LANES]; 4];
@@ -236,7 +251,10 @@ impl Rng {
     /// i and randbelow(`b`) for odd i, drawn in order (the draws of that many
     /// alternating choice_index(a), choice_index(b) calls).
     pub fn fill_below_pairs(&mut self, a: u64, b: u64, out: &mut [u16]) {
-        assert!(a > 0 && a <= 1 << 16 && b > 0 && b <= 1 << 16, "fill_below_pairs({a}, {b})");
+        assert!(
+            a > 0 && a <= 1 << 16 && b > 0 && b <= 1 << 16,
+            "fill_below_pairs({a}, {b})"
+        );
         let shift = |n: u64| 64 - (64 - (n - 1).leading_zeros()).max(1);
         let (sa, sb) = (shift(a), shift(b));
         // the bound and shift of the current draw, selected by mask so the
@@ -337,7 +355,8 @@ fn step(s: &mut [u64; 4]) {
 fn avx512_available() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
-        std::env::var_os("TTFX_NO_AVX512").is_none() && std::arch::is_x86_feature_detected!("avx512f")
+        std::env::var_os("TTFX_NO_AVX512").is_none()
+            && std::arch::is_x86_feature_detected!("avx512f")
     }
     #[cfg(not(target_arch = "x86_64"))]
     false
@@ -370,7 +389,12 @@ mod tests {
 
     #[test]
     fn jump_matrix() {
-        let mut s = [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, 0x0f1e_2d3c_4b5a_6978, 0x8796_a5b4_c3d2_e1f0];
+        let mut s = [
+            0x0123_4567_89ab_cdef,
+            0xfedc_ba98_7654_3210,
+            0x0f1e_2d3c_4b5a_6978,
+            0x8796_a5b4_c3d2_e1f0,
+        ];
         let mut jumped = [0u64; 4];
         for (w, word) in s.iter().enumerate() {
             for b in 0..64 {
@@ -404,7 +428,9 @@ mod tests {
             for len in [0usize, 1, 63, 64, 65, 200] {
                 let mut out = vec![0u16; len];
                 a.fill_below(n, &mut out);
-                let expected: Vec<u16> = (0..len).map(|_| b.choice_index(n as usize) as u16).collect();
+                let expected: Vec<u16> = (0..len)
+                    .map(|_| b.choice_index(n as usize) as u16)
+                    .collect();
                 assert_eq!(out, expected);
             }
             assert_eq!(a.next_u64(), b.next_u64());
@@ -418,8 +444,9 @@ mod tests {
             for len in [0usize, 1, 2, 63, 64, 65, 200] {
                 let mut out = vec![0u16; len];
                 a.fill_below_pairs(x, y, &mut out);
-                let expected: Vec<u16> =
-                    (0..len).map(|i| b.choice_index(if i % 2 == 0 { x } else { y } as usize) as u16).collect();
+                let expected: Vec<u16> = (0..len)
+                    .map(|i| b.choice_index(if i % 2 == 0 { x } else { y } as usize) as u16)
+                    .collect();
                 assert_eq!(out, expected);
                 if len % 2 == 1 {
                     b.choice_index(y as usize);

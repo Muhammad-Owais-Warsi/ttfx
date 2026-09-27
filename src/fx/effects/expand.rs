@@ -38,8 +38,13 @@ impl Effect for Expand {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -51,46 +56,75 @@ impl Effect for Expand {
             .map_err(other)?;
         let first = final_gradient.spectrum[0];
         let spectrum = |c: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::with_steps(&[first, c], 10, false).map_err(other)?.spectrum)
+            Ok(Gradient::with_steps(&[first, c], 10, false)
+                .map_err(other)?
+                .spectrum)
         };
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         // (symbol, final color) -> the frames of a plain scene
         let mut memo: HashMap<(Sym, Color), Vec<Frame>, FxBuild> = HashMap::default();
         // both of the old engine's passes use TopToBottomLeftToRight, which
         // draws nothing; the first only fills the final color map
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             let input = e.input_coord(slot);
             let sym = e.input_sym(slot);
             e.set_coordinate(slot, canvas.center);
             let path = e
-                .path_new(slot, config.movement_speed, Some(config.expand_easing), None, 0, false, Name::NONE)
+                .path_new(
+                    slot,
+                    config.movement_speed,
+                    Some(config.expand_easing),
+                    None,
+                    0,
+                    false,
+                    Name::NONE,
+                )
                 .map_err(other)?;
-            e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+            e.path_new_waypoint(path, input, None, Name::NONE)
+                .map_err(other)?;
             let path_name = e.paths.recs[path as usize].name;
             e.set_visible(slot, true);
             e.active_insert(slot);
-            e.register_event(slot, Event::PathActivated, Caller::Path(path_name), Action::SetLayer(1))
-                .map_err(other)?;
-            e.register_event(slot, Event::PathComplete, Caller::Path(path_name), Action::SetLayer(0))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathActivated,
+                Caller::Path(path_name),
+                Action::SetLayer(1),
+            )
+            .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(path_name),
+                Action::SetLayer(0),
+            )
+            .map_err(other)?;
             e.activate_path(self, slot, path);
             let scene = e.scene_new(slot, Name::NONE, false, Some(SyncMetric::Distance), None);
             if dynamic {
                 let fg = e.input_fg(slot).map(spectrum).transpose()?;
                 let bg = e.input_bg(slot).map(spectrum).transpose()?;
                 if fg.is_some() || bg.is_some() {
-                    e.apply_gradient(scene, &[sym], 1, fg.as_deref(), bg.as_deref()).map_err(other)?;
+                    e.apply_gradient(scene, &[sym], 1, fg.as_deref(), bg.as_deref())
+                        .map_err(other)?;
                 } else {
-                    e.add_frame(scene, sym, 1, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(scene, sym, 1, Some(ColorPair::default()), 0)
+                        .map_err(other)?;
                 }
             } else {
-                let final_fg = *final_gradient_mapping.get(&input).expect("gradient mapping fg");
+                let final_fg = *final_gradient_mapping
+                    .get(&input)
+                    .expect("gradient mapping fg");
                 let plain = e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0;
                 match memo.get(&(sym, final_fg)) {
                     Some(frames) if plain => e.append_frames(scene, frames),
                     _ => {
-                        e.apply_gradient(scene, &[sym], 5, Some(&spectrum(final_fg)?), None).map_err(other)?;
+                        e.apply_gradient(scene, &[sym], 5, Some(&spectrum(final_fg)?), None)
+                            .map_err(other)?;
                         if plain {
                             memo.insert((sym, final_fg), e.scenes.frames_of(scene).to_vec());
                         }

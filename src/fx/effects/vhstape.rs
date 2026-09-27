@@ -126,11 +126,16 @@ impl VhsTape {
     /// Line.line_movement_complete: no character has an active path.
     #[inline]
     fn line_complete(&self, e: &Engine, line: u32) -> bool {
-        self.line(line).iter().all(|&slot| *e.ch.path.at(slot) == NONE)
+        self.line(line)
+            .iter()
+            .all(|&slot| *e.ch.path.at(slot) == NONE)
     }
 
     fn lines_complete(&self, e: &Engine, lines: Lines) -> bool {
-        lines.as_slice().iter().all(|&line| self.line_complete(e, line))
+        lines
+            .as_slice()
+            .iter()
+            .all(|&line| self.line_complete(e, line))
     }
 
     fn line_insert(&self, e: &mut Engine, line: u32) {
@@ -192,7 +197,11 @@ impl VhsTape {
     /// VHSTapeIterator.glitch_wave. The caller has established that every
     /// wave line completed its movement, which is its only other condition.
     fn glitch_wave(&mut self, e: &mut Engine) {
-        let (text_bottom, text_top, text_height) = (e.canvas.text_bottom, e.canvas.text_top, e.canvas.text_height);
+        let (text_bottom, text_top, text_height) = (
+            e.canvas.text_bottom,
+            e.canvas.text_top,
+            e.canvas.text_height,
+        );
         // Python falsy check: None, or 0
         if matches!(self.wave_top, None | Some(0)) {
             if text_height < 3 {
@@ -300,14 +309,27 @@ fn other(message: String) -> EngineError {
 
 #[inline]
 fn visual(e: &mut Engine, sym: Sym, fg: Option<Color>, bg: Option<Color>) -> Visual {
-    e.visuals.make(&e.symbols, VisualInfo { sym, fg, bg, attrs: HAS_COLORS })
+    e.visuals.make(
+        &e.symbols,
+        VisualInfo {
+            sym,
+            fg,
+            bg,
+            attrs: HAS_COLORS,
+        },
+    )
 }
 
 impl Effect for VhsTape {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -323,8 +345,15 @@ impl Effect for VhsTape {
 
         let names = ["glitch", "restore", "glitch_wave_mid", "glitch_wave_end"].map(|n| e.name(n));
         let [glitch, restore, wave_mid, wave_end] = names;
-        let [base, fwd, bwd, snow, final_snow, final_redraw] =
-            ["base", "rgb_glitch_fwd", "rgb_glitch_bwd", "snow", "final_snow", "final_redraw"].map(|n| e.name(n));
+        let [base, fwd, bwd, snow, final_snow, final_redraw] = [
+            "base",
+            "rgb_glitch_fwd",
+            "rgb_glitch_bwd",
+            "snow",
+            "final_snow",
+            "final_redraw",
+        ]
+        .map(|n| e.name(n));
 
         // (noise color, snow symbol) -> visual, and the redraw block
         let snow_syms = SNOW_CHARS.map(|s| e.sym(s));
@@ -340,12 +369,16 @@ impl Effect for VhsTape {
         let line_colors = config.glitch_line_colors.len();
         let mut glitch_memo: Vec<Visual> = Vec::new();
 
-        let rows = e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowBottomToTop);
+        let rows =
+            e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowBottomToTop);
         let slots = e.char_count();
         self.glitch_path = vec![NONE; slots];
         self.scenes = vec![[NONE; 4]; slots];
         let chars: usize = rows.iter().map(Vec::len).sum();
-        e.scenes.reserve(chars * 7, chars * (1 + 2 * line_colors + SNOW_FRAMES + 1 + FINAL_SNOW_FRAMES + 2));
+        e.scenes.reserve(
+            chars * 7,
+            chars * (1 + 2 * line_colors + SNOW_FRAMES + 1 + FINAL_SNOW_FRAMES + 2),
+        );
         self.line_start.push(0);
         let mut frames: Vec<Frame> = Vec::with_capacity(FINAL_SNOW_FRAMES.max(line_colors) + 1);
         let mut draws = [0u32; 2 * (SNOW_FRAMES + FINAL_SNOW_FRAMES)];
@@ -362,19 +395,35 @@ impl Effect for VhsTape {
                     let (fg, bg) = (e.input_fg(slot), e.input_bg(slot));
                     (fg.or(Some(gray)), bg, fg, bg)
                 } else {
-                    let color = Some(*final_gradient_mapping.get(&input).expect("gradient mapping fg"));
+                    let color = Some(
+                        *final_gradient_mapping
+                            .get(&input)
+                            .expect("gradient mapping fg"),
+                    );
                     (color, None, color, None)
                 };
                 // paths: glitch, restore, glitch_wave_mid, glitch_wave_end
                 let shifted = |dx: i64| Coord::new(input.column + dx, input.row);
-                let path = e.path_new(slot, 2.0, None, None, hold_time, false, glitch).map_err(other)?;
-                e.path_new_waypoint(path, shifted(offset * direction), None, glitch).map_err(other)?;
-                let p = e.path_new(slot, 2.0, None, None, 0, false, restore).map_err(other)?;
-                e.path_new_waypoint(p, input, None, restore).map_err(other)?;
-                let p = e.path_new(slot, 2.0, None, None, 0, false, wave_mid).map_err(other)?;
-                e.path_new_waypoint(p, shifted(8), None, wave_mid).map_err(other)?;
-                let p = e.path_new(slot, 2.0, None, None, 0, false, wave_end).map_err(other)?;
-                e.path_new_waypoint(p, shifted(14), None, wave_end).map_err(other)?;
+                let path = e
+                    .path_new(slot, 2.0, None, None, hold_time, false, glitch)
+                    .map_err(other)?;
+                e.path_new_waypoint(path, shifted(offset * direction), None, glitch)
+                    .map_err(other)?;
+                let p = e
+                    .path_new(slot, 2.0, None, None, 0, false, restore)
+                    .map_err(other)?;
+                e.path_new_waypoint(p, input, None, restore)
+                    .map_err(other)?;
+                let p = e
+                    .path_new(slot, 2.0, None, None, 0, false, wave_mid)
+                    .map_err(other)?;
+                e.path_new_waypoint(p, shifted(8), None, wave_mid)
+                    .map_err(other)?;
+                let p = e
+                    .path_new(slot, 2.0, None, None, 0, false, wave_end)
+                    .map_err(other)?;
+                e.path_new_waypoint(p, shifted(14), None, wave_end)
+                    .map_err(other)?;
                 debug_assert_eq!(p, path + P_END);
                 self.glitch_path[slot as usize] = path;
 
@@ -393,7 +442,10 @@ impl Effect for VhsTape {
                 }
                 let glitch_visuals = &glitch_memo[memo_at..memo_at + line_colors];
                 frames.clear();
-                frames.extend(glitch_visuals.iter().map(|&visual| Frame { visual, duration: 1 }));
+                frames.extend(glitch_visuals.iter().map(|&visual| Frame {
+                    visual,
+                    duration: 1,
+                }));
                 let fwd_scene = e.scene_new(slot, fwd, false, Some(SyncMetric::Step), None);
                 e.add_frames_visual(fwd_scene, &frames).map_err(other)?;
                 frames.reverse();
@@ -414,7 +466,10 @@ impl Effect for VhsTape {
                 };
                 let scene = e.scene_new(slot, snow, false, None, None);
                 snow_frames(snow_draws, &mut frames);
-                frames.push(Frame { visual: stable, duration: 1 });
+                frames.push(Frame {
+                    visual: stable,
+                    duration: 1,
+                });
                 e.add_frames_visual(scene, &frames).map_err(other)?;
                 let snow_scene = scene;
                 let final_snow_scene = e.scene_new(slot, final_snow, false, None, None);
@@ -422,11 +477,21 @@ impl Effect for VhsTape {
                 let final_visual = visual(e, sym, final_fg, final_bg);
                 e.add_frames_visual(
                     scene,
-                    &[Frame { visual: block, duration: 6 }, Frame { visual: final_visual, duration: 1 }],
+                    &[
+                        Frame {
+                            visual: block,
+                            duration: 6,
+                        },
+                        Frame {
+                            visual: final_visual,
+                            duration: 1,
+                        },
+                    ],
                 )
                 .map_err(other)?;
                 snow_frames(final_draws, &mut frames);
-                e.add_frames_visual(final_snow_scene, &frames).map_err(other)?;
+                e.add_frames_visual(final_snow_scene, &frames)
+                    .map_err(other)?;
                 self.scenes[slot as usize] = [snow_scene, final_snow_scene, scene, fwd_scene];
 
                 // events. Only the effect activates the glitch and wave
@@ -434,19 +499,35 @@ impl Effect for VhsTape {
                 // right after (what their PATH_ACTIVATED events would do);
                 // restore is also activated by glitch's PATH_COMPLETE.
                 let events = [
-                    (Event::PathComplete, Caller::Path(glitch), Action::ActivatePath(restore)),
-                    (Event::PathActivated, Caller::Path(restore), Action::ActivateScene(bwd)),
-                    (Event::SceneComplete, Caller::Scene(bwd), Action::ActivateScene(base)),
+                    (
+                        Event::PathComplete,
+                        Caller::Path(glitch),
+                        Action::ActivatePath(restore),
+                    ),
+                    (
+                        Event::PathActivated,
+                        Caller::Path(restore),
+                        Action::ActivateScene(bwd),
+                    ),
+                    (
+                        Event::SceneComplete,
+                        Caller::Scene(bwd),
+                        Action::ActivateScene(base),
+                    ),
                 ];
                 for (event, caller, action) in events {
-                    e.register_event(slot, event, caller, action).map_err(other)?;
+                    e.register_event(slot, event, caller, action)
+                        .map_err(other)?;
                 }
             }
             self.line_slots.extend_from_slice(row);
             self.line_start.push(self.line_slots.len() as u32);
         }
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             e.set_visible(slot, true);
             e.activate_scene_name(self, slot, base);

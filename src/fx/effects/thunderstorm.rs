@@ -150,7 +150,12 @@ impl Thunderstorm {
             strike_fade: Default::default(),
             spark_frames: Vec::new(),
             rain_color: Color::from_hex("aaaaff").unwrap(),
-            names: Names { glow: Name::NONE, fade: Name::NONE, unfade: Name::NONE, flash: Name::NONE },
+            names: Names {
+                glow: Name::NONE,
+                fade: Name::NONE,
+                unfade: Name::NONE,
+                flash: Name::NONE,
+            },
         }
     }
 
@@ -215,7 +220,11 @@ impl Thunderstorm {
             e.set_coordinate(strike_char, Coord::new(column, row));
             self.strike_sym[strike_char as usize] = symbol;
             let colors = ColorPair::new(Some(self.config.lightning_color), None);
-            e.set_appearance(strike_char, Some(self.strike_syms[symbol as usize]), Some(colors));
+            e.set_appearance(
+                strike_char,
+                Some(self.strike_syms[symbol as usize]),
+                Some(colors),
+            );
             row -= 1;
             if symbol == BACKSLASH {
                 column += 1;
@@ -246,14 +255,21 @@ impl Thunderstorm {
         for &strike_char in &self.pending {
             let symbol = self.strike_sym[strike_char as usize] as usize;
             let flash = e.scene_new(strike_char, n.flash, false, None, Some(flash_ease));
-            e.add_frames_visual(flash, &self.strike_flash[symbol]).expect("flash frame failed");
+            e.add_frames_visual(flash, &self.strike_flash[symbol])
+                .expect("flash frame failed");
             self.flash[strike_char as usize] = flash;
             let fade = e.scene_new(strike_char, n.fade, false, None, None);
-            e.add_frames_visual(fade, &self.strike_fade[symbol]).expect("fade frame failed");
+            e.add_frames_visual(fade, &self.strike_fade[symbol])
+                .expect("fade frame failed");
             e.set_layer(strike_char, 1);
             let register = |e: &mut Engine, caller: Name, action: Action| {
-                e.register_event(strike_char, Event::SceneComplete, Caller::Scene(caller), action)
-                    .expect("strike event registration failed");
+                e.register_event(
+                    strike_char,
+                    Event::SceneComplete,
+                    Caller::Scene(caller),
+                    action,
+                )
+                .expect("strike event registration failed");
             };
             register(e, n.flash, Action::ActivateScene(n.fade));
             register(e, n.fade, Action::Callback(CB_HIDE_CHARACTER, 0));
@@ -386,9 +402,24 @@ impl Thunderstorm {
         let storm = adjust_color_pair_brightness(&visible, 0.5);
         let storm_fg = storm.fg_color.expect("storm fg");
         let visible_fg = visible.fg_color.expect("visible fg");
-        let frame = |e: &mut Engine, out: &mut Vec<Frame>, fg: Option<Color>, bg: Option<Color>, duration: i64| {
-            let visual = e.visuals.make(&e.symbols, VisualInfo { sym, fg, bg, attrs: HAS_COLORS });
-            out.push(Frame { visual, duration: duration as u32 });
+        let frame = |e: &mut Engine,
+                     out: &mut Vec<Frame>,
+                     fg: Option<Color>,
+                     bg: Option<Color>,
+                     duration: i64| {
+            let visual = e.visuals.make(
+                &e.symbols,
+                VisualInfo {
+                    sym,
+                    fg,
+                    bg,
+                    attrs: HAS_COLORS,
+                },
+            );
+            out.push(Frame {
+                visual,
+                duration: duration as u32,
+            });
         };
         let mut counts = [0u8; 4];
         let mut mark = out.len();
@@ -402,7 +433,13 @@ impl Thunderstorm {
             frame(e, out, Some(color), storm.bg_color, config.text_glow_time);
         }
         if dynamic {
-            frame(e, out, storm.fg_color, storm.bg_color, config.text_glow_time);
+            frame(
+                e,
+                out,
+                storm.fg_color,
+                storm.bg_color,
+                config.text_glow_time,
+            );
         }
         count(out, 0);
         // fade before the storm
@@ -454,14 +491,22 @@ fn other(message: String) -> EngineError {
 }
 
 fn gradient(start: Color, end: Color, do_loop: bool) -> Result<Vec<Color>, EngineError> {
-    Ok(Gradient::with_steps(&[start, end], 7, do_loop).map_err(other)?.spectrum)
+    Ok(Gradient::with_steps(&[start, end], 7, do_loop)
+        .map_err(other)?
+        .spectrum)
 }
 
 /// _adjust_color_pair_brightness.
 fn adjust_color_pair_brightness(colors: &ColorPair, brightness: f64) -> ColorPair {
     ColorPair::new(
-        colors.fg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, brightness)),
-        colors.bg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, brightness)),
+        colors
+            .fg_color
+            .as_ref()
+            .map(|c| Animation::adjust_color_brightness(c, brightness)),
+        colors
+            .bg_color
+            .as_ref()
+            .map(|c| Animation::adjust_color_brightness(c, brightness)),
     )
 }
 
@@ -493,20 +538,33 @@ fn initialize_spark(e: &mut Engine, slot: u32, glow: Name, spark_frames: &[(Sym,
     e.set_layer(slot, 2);
     let scene = e.scene_new(slot, glow, false, None, Some(Easing::InCirc));
     let sym = e.input_sym(slot);
-    let frames = &spark_frames.iter().find(|(s, _)| *s == sym).expect("spark symbol").1;
-    e.add_frames_visual(scene, frames).expect("spark glow frame failed");
+    let frames = &spark_frames
+        .iter()
+        .find(|(s, _)| *s == sym)
+        .expect("spark symbol")
+        .1;
+    e.add_frames_visual(scene, frames)
+        .expect("spark glow frame failed");
 }
 
 /// _setup_raindrop: a straight fall, reclaimed when the path completes.
 fn setup_raindrop(e: &mut Engine, slot: u32) {
     let origin = e.coord(slot);
     let speed = e.rng.uniform(0.5, 1.5);
-    let path = e.path_new(slot, speed, None, None, 0, false, Name::NONE).expect("rain new_path failed");
+    let path = e
+        .path_new(slot, speed, None, None, 0, false, Name::NONE)
+        .expect("rain new_path failed");
     let target = Coord::new(origin.column + e.canvas.top + 1, e.canvas.bottom - 1);
-    e.path_new_waypoint(path, target, None, Name::NONE).expect("rain new_waypoint failed");
+    e.path_new_waypoint(path, target, None, Name::NONE)
+        .expect("rain new_waypoint failed");
     let name = e.paths.recs[path as usize].name;
-    e.register_event(slot, Event::PathComplete, Caller::Path(name), Action::Callback(CB_RECLAIM_RAIN, 0))
-        .expect("rain reclaim registration failed");
+    e.register_event(
+        slot,
+        Event::PathComplete,
+        Caller::Path(name),
+        Action::Callback(CB_RECLAIM_RAIN, 0),
+    )
+    .expect("rain reclaim registration failed");
     e.activate_path(&mut NoHooks, slot, path);
 }
 
@@ -515,16 +573,35 @@ fn setup_raindrop(e: &mut Engine, slot: u32) {
 fn setup_sparks_for_impact(e: &mut Engine, slot: u32, glow: Name) {
     let impact = e.coord(slot);
     let speed = e.rng.uniform(0.1, 0.25);
-    let path =
-        e.path_new(slot, speed, Some(Easing::OutQuint), None, 30, false, Name::NONE).expect("spark new_path failed");
+    let path = e
+        .path_new(
+            slot,
+            speed,
+            Some(Easing::OutQuint),
+            None,
+            30,
+            false,
+            Name::NONE,
+        )
+        .expect("spark new_path failed");
     let offset = e.rng.randint(4, 20) * [1, -1][e.rng.choice_index(2)];
     let target = Coord::new(impact.column + offset, e.canvas.bottom);
     let bezier_column = impact.column - floor_div(impact.column - target.column, 2);
     let bezier_row = e.rng.randint(1, e.canvas.top);
-    e.path_new_waypoint(path, target, Some(&[Coord::new(bezier_column, bezier_row)]), Name::NONE)
-        .expect("spark new_waypoint failed");
-    e.register_event(slot, Event::SceneComplete, Caller::Scene(glow), Action::Callback(CB_RECLAIM_SPARK, 0))
-        .expect("spark reclaim registration failed");
+    e.path_new_waypoint(
+        path,
+        target,
+        Some(&[Coord::new(bezier_column, bezier_row)]),
+        Name::NONE,
+    )
+    .expect("spark new_waypoint failed");
+    e.register_event(
+        slot,
+        Event::SceneComplete,
+        Caller::Scene(glow),
+        Action::Callback(CB_RECLAIM_SPARK, 0),
+    )
+    .expect("spark reclaim registration failed");
     let scene = e.scene_find(slot, glow).expect("spark glow scene");
     e.activate_scene(&mut NoHooks, slot, scene);
     e.activate_path(&mut NoHooks, slot, path);
@@ -542,7 +619,9 @@ impl Hooks for Thunderstorm {
                 if let Some(input_char) = e.char_at_input_coord(e.coord(slot)) {
                     if e.is_visible(input_char) {
                         match self.glow.get(input_char as usize) {
-                            Some(&scene) if scene != NONE => e.activate_scene(self, input_char, scene),
+                            Some(&scene) if scene != NONE => {
+                                e.activate_scene(self, input_char, scene)
+                            }
                             _ => {
                                 let glow = self.names.glow;
                                 e.activate_scene_name(self, input_char, glow)
@@ -554,8 +633,16 @@ impl Hooks for Thunderstorm {
             }
             CB_RETURN_STRIKE_TO_POOL => self.available.push(slot),
             CB_SET_STRIKE_IN_PROGRESS_FALSE => self.strike_in_progress = false,
-            CB_RECLAIM_RAIN => self.rain_pool.as_mut().unwrap().reclaim(e, slot, true, true),
-            CB_RECLAIM_SPARK => self.spark_pool.as_mut().unwrap().reclaim(e, slot, true, true),
+            CB_RECLAIM_RAIN => self
+                .rain_pool
+                .as_mut()
+                .unwrap()
+                .reclaim(e, slot, true, true),
+            CB_RECLAIM_SPARK => self
+                .spark_pool
+                .as_mut()
+                .unwrap()
+                .reclaim(e, slot, true, true),
             _ => {}
         }
     }
@@ -564,8 +651,12 @@ impl Hooks for Thunderstorm {
 impl Effect for Thunderstorm {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        self.names =
-            Names { glow: e.name("glow"), fade: e.name("fade"), unfade: e.name("unfade"), flash: e.name("flash") };
+        self.names = Names {
+            glow: e.name("glow"),
+            fade: e.name("fade"),
+            unfade: e.name("unfade"),
+            flash: e.name("flash"),
+        };
         for (i, s) in STRIKE_SYMBOLS.iter().enumerate() {
             self.strike_syms[i] = e.sym(s);
         }
@@ -576,9 +667,12 @@ impl Effect for Thunderstorm {
         let rain_symbols: Vec<Sym> = config.raindrop_symbols.iter().map(|s| e.sym(s)).collect();
         let mut rain_pool = ParticlePool::new(rain_symbols, None, None).map_err(other)?;
         let rain_color = self.rain_color;
-        rain_pool.preallocate(e, 50, |e, p| initialize_raindrop(e, p, rain_color)).map_err(other)?;
+        rain_pool
+            .preallocate(e, 50, |e, p| initialize_raindrop(e, p, rain_color))
+            .map_err(other)?;
         self.rain_pool = Some(rain_pool);
-        let spark_gradient = Gradient::with_steps(&[config.spark_glow_color, background], 7, false).map_err(other)?;
+        let spark_gradient = Gradient::with_steps(&[config.spark_glow_color, background], 7, false)
+            .map_err(other)?;
         let spark_symbols: Vec<Sym> = config.spark_symbols.iter().map(|s| e.sym(s)).collect();
         for &sym in &spark_symbols {
             if self.spark_frames.iter().any(|(s, _)| *s == sym) {
@@ -588,9 +682,19 @@ impl Effect for Thunderstorm {
                 .spectrum
                 .iter()
                 .map(|&color| {
-                    let visual =
-                        e.visuals.make(&e.symbols, VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS });
-                    Frame { visual, duration: config.spark_glow_time as u32 }
+                    let visual = e.visuals.make(
+                        &e.symbols,
+                        VisualInfo {
+                            sym,
+                            fg: Some(color),
+                            bg: None,
+                            attrs: HAS_COLORS,
+                        },
+                    );
+                    Frame {
+                        visual,
+                        duration: config.spark_glow_time as u32,
+                    }
                 })
                 .collect();
             self.spark_frames.push((sym, frames));
@@ -598,14 +702,21 @@ impl Effect for Thunderstorm {
         let mut spark_pool = ParticlePool::new(spark_symbols, Some(2000), None).map_err(other)?;
         let glow = self.names.glow;
         let spark_frames = &self.spark_frames;
-        spark_pool.preallocate(e, 200, |e, p| initialize_spark(e, p, glow, spark_frames)).map_err(other)?;
+        spark_pool
+            .preallocate(e, 200, |e, p| initialize_spark(e, p, glow, spark_frames))
+            .map_err(other)?;
         self.spark_pool = Some(spark_pool);
         self.storm_start_time = e.clock.now_monotonic();
 
         // build(): the final gradient mapping, 200 strike characters
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -618,16 +729,30 @@ impl Effect for Thunderstorm {
         self.build_strike_characters(e, 200);
 
         let lightning = config.lightning_color;
-        let flash_colors = gradient(lightning, Animation::adjust_color_brightness(&lightning, 1.7), true)?;
-        let fade_colors = Gradient::with_steps(&[lightning, background], 6, false).map_err(other)?.spectrum;
+        let flash_colors = gradient(
+            lightning,
+            Animation::adjust_color_brightness(&lightning, 1.7),
+            true,
+        )?;
+        let fade_colors = Gradient::with_steps(&[lightning, background], 6, false)
+            .map_err(other)?
+            .spectrum;
         for i in 0..3 {
             let sym = self.strike_syms[i];
             let mut frames = |colors: &[Color], duration: u32| -> Vec<Frame> {
                 colors
                     .iter()
                     .map(|&color| {
-                        let info = VisualInfo { sym, fg: Some(color), bg: None, attrs: HAS_COLORS };
-                        Frame { visual: e.visuals.make(&e.symbols, info), duration }
+                        let info = VisualInfo {
+                            sym,
+                            fg: Some(color),
+                            bg: None,
+                            attrs: HAS_COLORS,
+                        };
+                        Frame {
+                            visual: e.visuals.make(&e.symbols, info),
+                            duration,
+                        }
                     })
                     .collect()
             };
@@ -639,13 +764,22 @@ impl Effect for Thunderstorm {
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         let always = e.existing_color_handling() == ExistingColorHandling::Always;
         let neutral_gray = Color::from_hex("808080").unwrap();
-        self.text = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        self.text = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         let slots = e.char_count();
         self.glow = vec![NONE; slots];
         self.fade = vec![NONE; slots];
         self.unfade = vec![NONE; slots];
         self.flash.resize(slots, NONE);
-        type Key = (Sym, Option<Color>, Option<Color>, Option<Color>, Option<Color>);
+        type Key = (
+            Sym,
+            Option<Color>,
+            Option<Color>,
+            Option<Color>,
+            Option<Color>,
+        );
         let mut memo: HashMap<Key, TextFrames, FxBuild> = HashMap::default();
         let mut memo_frames: Vec<Frame> = Vec::new();
         let n = self.names;
@@ -654,18 +788,35 @@ impl Effect for Thunderstorm {
             let sym = e.input_sym(slot);
             let (input_fg, input_bg) = (e.input_fg(slot), e.input_bg(slot));
             let (visible, restore) = if dynamic {
-                (ColorPair::new(Some(input_fg.unwrap_or(neutral_gray)), input_bg), ColorPair::new(input_fg, input_bg))
+                (
+                    ColorPair::new(Some(input_fg.unwrap_or(neutral_gray)), input_bg),
+                    ColorPair::new(input_fg, input_bg),
+                )
             } else {
-                let visible = ColorPair::new(Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()), None);
+                let visible = ColorPair::new(
+                    Some(*final_gradient_mapping.get(&e.input_coord(slot)).unwrap()),
+                    None,
+                );
                 (visible, visible)
             };
-            let key = (sym, visible.fg_color, visible.bg_color, restore.fg_color, restore.bg_color);
+            let key = (
+                sym,
+                visible.fg_color,
+                visible.bg_color,
+                restore.fg_color,
+                restore.bg_color,
+            );
             let tf = match memo.get_mut(&key) {
                 Some(tf) => tf,
                 None => {
                     let start = memo_frames.len() as u32;
-                    let counts = self.text_frames(e, &mut memo_frames, sym, visible, restore, dynamic)?;
-                    memo.entry(key).or_insert(TextFrames { start, counts, templates: [NONE; 4] })
+                    let counts =
+                        self.text_frames(e, &mut memo_frames, sym, visible, restore, dynamic)?;
+                    memo.entry(key).or_insert(TextFrames {
+                        start,
+                        counts,
+                        templates: [NONE; 4],
+                    })
                 }
             };
             // a copy shares its template's frames: the scenes are pristine and
@@ -678,7 +829,8 @@ impl Effect for Thunderstorm {
                     e.scene_copy(slot, tf.templates[i], name)
                 } else {
                     let scene = e.scene_new(slot, name, false, None, None);
-                    e.add_frames_visual(scene, &memo_frames[at..at + count]).map_err(other)?;
+                    e.add_frames_visual(scene, &memo_frames[at..at + count])
+                        .map_err(other)?;
                     scene
                 };
                 at += count;
@@ -690,8 +842,13 @@ impl Effect for Thunderstorm {
                 };
                 table[slot as usize] = scene;
             }
-            if !clone && e.scene(self.glow[slot as usize]).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0 {
-                for (i, table) in [&self.glow, &self.fade, &self.unfade, &self.flash].into_iter().enumerate() {
+            if !clone
+                && e.scene(self.glow[slot as usize]).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0
+            {
+                for (i, table) in [&self.glow, &self.fade, &self.unfade, &self.flash]
+                    .into_iter()
+                    .enumerate()
+                {
                     tf.templates[i] = table[slot as usize];
                 }
             }

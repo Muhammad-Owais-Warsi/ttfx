@@ -50,13 +50,16 @@ impl OrbittingVolley {
     /// appearance.
     fn color_launcher(&self, e: &mut Engine, slot: u32) {
         let map = self.launcher_map.as_ref().expect("built");
-        let color = *map.get(&e.coord(slot)).expect("launcher coord outside gradient map");
+        let color = *map
+            .get(&e.coord(slot))
+            .expect("launcher coord outside gradient map");
         e.set_appearance(slot, None, Some(ColorPair::new(Some(color), None)));
     }
 
     /// OrbittingVolleyIterator._set_launcher_coordinates(parent 0, child).
     fn set_child(&self, e: &mut Engine, child: u32) {
-        let (top, bottom, left, right) = (e.canvas.top, e.canvas.bottom, e.canvas.left, e.canvas.right);
+        let (top, bottom, left, right) =
+            (e.canvas.top, e.canvas.bottom, e.canvas.left, e.canvas.right);
         let progress = e.coord(self.launchers[0]).column as f64 / right as f64;
         let input = e.input_coord(child);
         if input == Coord::new(right, top) {
@@ -83,8 +86,13 @@ impl Effect for OrbittingVolley {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_map = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -110,13 +118,19 @@ impl Effect for OrbittingVolley {
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
         let input_path = e.name("input_path");
         let mut path_of = vec![NONE; e.char_count()];
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         for slot in characters {
             let input = e.input_coord(slot);
             let final_colors = if dynamic {
                 ColorPair::new(e.input_fg(slot), e.input_bg(slot))
             } else {
-                ColorPair::new(Some(*final_map.get(&input).expect("gradient mapping fg")), None)
+                ColorPair::new(
+                    Some(*final_map.get(&input).expect("gradient mapping fg")),
+                    None,
+                )
             };
             let path = e
                 .path_new(
@@ -129,18 +143,36 @@ impl Effect for OrbittingVolley {
                     input_path,
                 )
                 .map_err(other)?;
-            e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
-            path_of[slot as usize] = path;
-            e.register_event(slot, Event::PathComplete, Caller::Path(input_path), Action::SetLayer(0))
+            e.path_new_waypoint(path, input, None, Name::NONE)
                 .map_err(other)?;
+            path_of[slot as usize] = path;
+            e.register_event(
+                slot,
+                Event::PathComplete,
+                Caller::Path(input_path),
+                Action::SetLayer(0),
+            )
+            .map_err(other)?;
             e.set_appearance(slot, None, Some(final_colors));
         }
 
         let specs = [
-            (Coord::new(canvas.left, canvas.top), &config.top_launcher_symbol),
-            (Coord::new(canvas.right, canvas.top), &config.right_launcher_symbol),
-            (Coord::new(canvas.right, canvas.bottom), &config.bottom_launcher_symbol),
-            (Coord::new(canvas.left, canvas.bottom), &config.left_launcher_symbol),
+            (
+                Coord::new(canvas.left, canvas.top),
+                &config.top_launcher_symbol,
+            ),
+            (
+                Coord::new(canvas.right, canvas.top),
+                &config.right_launcher_symbol,
+            ),
+            (
+                Coord::new(canvas.right, canvas.bottom),
+                &config.bottom_launcher_symbol,
+            ),
+            (
+                Coord::new(canvas.left, canvas.bottom),
+                &config.left_launcher_symbol,
+            ),
         ];
         for (i, (coord, symbol)) in specs.into_iter().enumerate() {
             let slot = e.add_character(symbol, coord);
@@ -154,10 +186,23 @@ impl Effect for OrbittingVolley {
         // Launcher.build_paths: the main launcher starts at waypoints[0], so
         // the rotation is the identity
         let perimeter_name = e.name("perimeter");
-        let perimeter =
-            e.path_new(main, config.launcher_movement_speed, None, Some(2), 0, false, perimeter_name).map_err(other)?;
-        for waypoint in [Coord::new(canvas.left, canvas.top), Coord::new(canvas.right, canvas.top)] {
-            e.path_new_waypoint(perimeter, waypoint, None, Name::NONE).map_err(other)?;
+        let perimeter = e
+            .path_new(
+                main,
+                config.launcher_movement_speed,
+                None,
+                Some(2),
+                0,
+                false,
+                perimeter_name,
+            )
+            .map_err(other)?;
+        for waypoint in [
+            Coord::new(canvas.left, canvas.top),
+            Coord::new(canvas.right, canvas.top),
+        ] {
+            e.path_new_waypoint(perimeter, waypoint, None, Name::NONE)
+                .map_err(other)?;
         }
         self.perimeter = perimeter;
         e.activate_path(self, main, perimeter);
@@ -170,7 +215,8 @@ impl Effect for OrbittingVolley {
             .collect();
         self.cursor = [0, 1, 2, 3];
         // max(int((volley_size * len(input_characters)) / 4), 1)
-        self.volley = ((config.volley_size * e.input_chars.len() as f64 / 4.0) as i64).max(1) as usize;
+        self.volley =
+            ((config.volley_size * e.input_chars.len() as f64 / 4.0) as i64).max(1) as usize;
         self.delay = 0;
         self.complete = false;
         Ok(())

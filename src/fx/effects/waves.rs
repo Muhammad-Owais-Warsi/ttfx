@@ -27,7 +27,10 @@ pub struct Waves {
 
 impl Waves {
     pub fn new(config: WavesConfig) -> Self {
-        Waves { config, pending: VecDeque::new() }
+        Waves {
+            config,
+            pending: VecDeque::new(),
+        }
     }
 }
 
@@ -40,8 +43,13 @@ fn other(message: String) -> EngineError {
 impl Effect for Waves {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let canvas = &e.canvas;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
@@ -52,20 +60,35 @@ impl Effect for Waves {
                 config.final_gradient_direction,
             )
             .map_err(other)?;
-        let wave_gradient =
-            Gradient::new(&config.wave_gradient_stops, &config.wave_gradient_steps, false, false).map_err(other)?;
+        let wave_gradient = Gradient::new(
+            &config.wave_gradient_stops,
+            &config.wave_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let wave_last = *wave_gradient.spectrum.last().unwrap();
         let wave_symbols: Vec<Sym> = config.wave_symbols.iter().map(|s| e.sym(s)).collect();
         // Gradient([wave last, color], final steps)
         let pair_spectrum = |color: Color| -> Result<Vec<Color>, EngineError> {
-            Ok(Gradient::new(&[wave_last, color], &config.final_gradient_steps, false, false).map_err(other)?.spectrum)
+            Ok(Gradient::new(
+                &[wave_last, color],
+                &config.final_gradient_steps,
+                false,
+                false,
+            )
+            .map_err(other)?
+            .spectrum)
         };
         let handling = e.existing_color_handling();
         let dynamic = handling == ExistingColorHandling::Dynamic;
         let wave = Name::auto(0);
         let final_ = Name::auto(1);
 
-        let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
+        let characters = e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        );
         let mut template = NONE;
         // the last final color, its index and spectrum; (input symbol, final
         // color index) -> the final frames of a plain scene
@@ -80,10 +103,17 @@ impl Effect for Waves {
             } else {
                 let scene = e.scene_new(slot, wave, false, None, Some(config.wave_easing));
                 for _ in 0..config.wave_count {
-                    e.apply_gradient(scene, &wave_symbols, config.wave_length, Some(&wave_gradient.spectrum), None)
-                        .map_err(other)?;
+                    e.apply_gradient(
+                        scene,
+                        &wave_symbols,
+                        config.wave_length,
+                        Some(&wave_gradient.spectrum),
+                        None,
+                    )
+                    .map_err(other)?;
                 }
-                if template == NONE && e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0 {
+                if template == NONE && e.scene(scene).flags & (SCF_PREEXISTING | SCF_PRE_BOLD) == 0
+                {
                     template = scene;
                 }
                 scene
@@ -93,19 +123,40 @@ impl Effect for Waves {
             if dynamic {
                 let (fg, bg) = (e.input_fg(slot), e.input_bg(slot));
                 if fg.is_none() && bg.is_none() {
-                    e.add_frame(final_scene, sym, FINAL_DURATION, Some(ColorPair::default()), 0).map_err(other)?;
+                    e.add_frame(
+                        final_scene,
+                        sym,
+                        FINAL_DURATION,
+                        Some(ColorPair::default()),
+                        0,
+                    )
+                    .map_err(other)?;
                 } else {
                     let fg_spectrum = fg.map(pair_spectrum).transpose()?;
                     let bg_spectrum = bg.map(pair_spectrum).transpose()?;
-                    e.apply_gradient(final_scene, &[sym], FINAL_DURATION, fg_spectrum.as_deref(), bg_spectrum.as_deref())
-                        .map_err(other)?;
+                    e.apply_gradient(
+                        final_scene,
+                        &[sym],
+                        FINAL_DURATION,
+                        fg_spectrum.as_deref(),
+                        bg_spectrum.as_deref(),
+                    )
+                    .map_err(other)?;
                     if fg.is_none() {
-                        e.add_frame(final_scene, sym, FINAL_DURATION, Some(ColorPair::new(None, bg)), 0)
-                            .map_err(other)?;
+                        e.add_frame(
+                            final_scene,
+                            sym,
+                            FINAL_DURATION,
+                            Some(ColorPair::new(None, bg)),
+                            0,
+                        )
+                        .map_err(other)?;
                     }
                 }
             } else {
-                let final_fg = *final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping fg");
+                let final_fg = *final_gradient_mapping
+                    .get(&e.input_coord(slot))
+                    .expect("gradient mapping fg");
                 if last_final.as_ref().is_none_or(|(c, _, _)| *c != final_fg) {
                     let next_index = final_index.len() as u32;
                     let index = *final_index.entry(final_fg).or_insert(next_index);
@@ -117,24 +168,38 @@ impl Effect for Waves {
                     Some(frames) if plain => e.append_frames(final_scene, frames),
                     _ => {
                         for &step in spectrum {
-                            e.add_frame(final_scene, sym, FINAL_DURATION, Some(ColorPair::new(Some(step), None)), 0)
-                                .map_err(other)?;
+                            e.add_frame(
+                                final_scene,
+                                sym,
+                                FINAL_DURATION,
+                                Some(ColorPair::new(Some(step), None)),
+                                0,
+                            )
+                            .map_err(other)?;
                         }
                         if plain {
-                            final_memo.insert((sym, *index), e.scenes.frames_of(final_scene).to_vec());
+                            final_memo
+                                .insert((sym, *index), e.scenes.frames_of(final_scene).to_vec());
                         }
                     }
                 }
             }
-            e.register_event(slot, Event::SceneComplete, Caller::Scene(wave), Action::ActivateScene(final_))
-                .map_err(other)?;
+            e.register_event(
+                slot,
+                Event::SceneComplete,
+                Caller::Scene(wave),
+                Action::ActivateScene(final_),
+            )
+            .map_err(other)?;
             e.activate_scene(self, slot, wave_scene);
             if dynamic {
                 let colors = ColorPair::new(e.input_fg(slot), e.input_bg(slot));
                 e.set_appearance(slot, Some(sym), Some(colors));
             }
         }
-        self.pending = e.get_characters_grouped(CharacterFilter::default(), config.wave_direction).into();
+        self.pending = e
+            .get_characters_grouped(CharacterFilter::default(), config.wave_direction)
+            .into();
         Ok(())
     }
 

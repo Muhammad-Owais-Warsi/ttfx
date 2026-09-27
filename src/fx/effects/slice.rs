@@ -34,11 +34,21 @@ fn other(message: String) -> EngineError {
 
 /// The send_to! macro: set the origin, a path to the input coordinate,
 /// activate it; then the active insert and the closing visibility.
-fn send(e: &mut Engine, hooks: &mut Slice, slot: u32, origin: Coord, speed: f64, ease: Easing) -> Result<(), EngineError> {
+fn send(
+    e: &mut Engine,
+    hooks: &mut Slice,
+    slot: u32,
+    origin: Coord,
+    speed: f64,
+    ease: Easing,
+) -> Result<(), EngineError> {
     let input = e.input_coord(slot);
     e.set_coordinate(slot, origin);
-    let path = e.path_new(slot, speed, Some(ease), None, 0, false, Name::NONE).map_err(other)?;
-    e.path_new_waypoint(path, input, None, Name::NONE).map_err(other)?;
+    let path = e
+        .path_new(slot, speed, Some(ease), None, 0, false, Name::NONE)
+        .map_err(other)?;
+    e.path_new_waypoint(path, input, None, Name::NONE)
+        .map_err(other)?;
     e.activate_path(hooks, slot, path);
     e.active_insert(slot);
     e.set_visible(slot, true);
@@ -49,8 +59,13 @@ impl Effect for Slice {
     fn build(&mut self, e: &mut Engine) -> Result<(), EngineError> {
         let config = self.config.clone();
         let canvas = e.canvas.clone();
-        let final_gradient =
-            Gradient::new(&config.final_gradient_stops, &config.final_gradient_steps, false, false).map_err(other)?;
+        let final_gradient = Gradient::new(
+            &config.final_gradient_stops,
+            &config.final_gradient_steps,
+            false,
+            false,
+        )
+        .map_err(other)?;
         let final_gradient_mapping = final_gradient
             .build_coordinate_color_mapping(
                 canvas.text_bottom,
@@ -61,11 +76,21 @@ impl Effect for Slice {
             )
             .map_err(other)?;
         let dynamic = e.existing_color_handling() == ExistingColorHandling::Dynamic;
-        for slot in e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight) {
+        for slot in e.get_characters(
+            CharacterFilter::default(),
+            CharacterSort::TopToBottomLeftToRight,
+        ) {
             let colors = if dynamic {
                 ColorPair::new(e.input_fg(slot), e.input_bg(slot))
             } else {
-                ColorPair::new(Some(*final_gradient_mapping.get(&e.input_coord(slot)).expect("gradient mapping fg")), None)
+                ColorPair::new(
+                    Some(
+                        *final_gradient_mapping
+                            .get(&e.input_coord(slot))
+                            .expect("gradient mapping fg"),
+                    ),
+                    None,
+                )
             };
             e.set_appearance(slot, None, Some(colors));
         }
@@ -76,18 +101,35 @@ impl Effect for Slice {
             "vertical" => {
                 // row i's left half from the top, the opposite row's right
                 // half from the bottom
-                let rows = e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowBottomToTop);
+                let rows = e.get_characters_grouped(
+                    CharacterFilter::default(),
+                    CharacterGroup::RowBottomToTop,
+                );
                 for (i, row) in rows.iter().enumerate() {
                     for &slot in row {
                         let column = e.input_coord(slot).column;
                         if column <= canvas.text_center_column {
-                            send(e, self, slot, Coord::new(column, canvas.top + 1), speed, ease)?;
+                            send(
+                                e,
+                                self,
+                                slot,
+                                Coord::new(column, canvas.top + 1),
+                                speed,
+                                ease,
+                            )?;
                         }
                     }
                     for &slot in &rows[rows.len() - (i + 1)] {
                         let column = e.input_coord(slot).column;
                         if column > canvas.text_center_column {
-                            send(e, self, slot, Coord::new(column, canvas.bottom - 1), speed, ease)?;
+                            send(
+                                e,
+                                self,
+                                slot,
+                                Coord::new(column, canvas.bottom - 1),
+                                speed,
+                                ease,
+                            )?;
                         }
                     }
                 }
@@ -100,7 +142,8 @@ impl Effect for Slice {
                     outer_fill_chars: true,
                     added_chars: false,
                 };
-                let mut columns = e.get_characters_grouped(filter, CharacterGroup::ColumnRightToLeft);
+                let mut columns =
+                    e.get_characters_grouped(filter, CharacterGroup::ColumnRightToLeft);
                 // trim each column to the text rectangle; drop empty columns
                 for column in &mut columns {
                     column.retain(|&slot| {
@@ -122,7 +165,14 @@ impl Effect for Slice {
                     for &slot in &columns[columns.len() - (i + 1)] {
                         let row = e.input_coord(slot).row;
                         if row > canvas.text_center_row {
-                            send(e, self, slot, Coord::new(canvas.right + 1, row), speed, ease)?;
+                            send(
+                                e,
+                                self,
+                                slot,
+                                Coord::new(canvas.right + 1, row),
+                                speed,
+                                ease,
+                            )?;
                         }
                     }
                 }
@@ -131,19 +181,21 @@ impl Effect for Slice {
                 // the first half of the diagonals from the bottom (origin
                 // column of the group's first character), the second half
                 // from the top (its last), interleaved
-                let diagonals =
-                    e.get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalBottomLeftToTopRight);
+                let diagonals = e.get_characters_grouped(
+                    CharacterFilter::default(),
+                    CharacterGroup::DiagonalBottomLeftToTopRight,
+                );
                 let (left, right) = diagonals.split_at(diagonals.len() / 2);
-                for i in 0..right.len() {
+                for (i, right_group) in right.iter().enumerate() {
                     if let Some(group) = left.get(i) {
                         let origin = Coord::new(e.input_coord(group[0]).column, canvas.bottom - 1);
                         for &slot in group {
                             send(e, self, slot, origin, speed, ease)?;
                         }
                     }
-                    let group = &right[i];
-                    let origin = Coord::new(e.input_coord(group[group.len() - 1]).column, canvas.top + 1);
-                    for &slot in group {
+                    let last = right_group[right_group.len() - 1];
+                    let origin = Coord::new(e.input_coord(last).column, canvas.top + 1);
+                    for &slot in right_group {
                         send(e, self, slot, origin, speed, ease)?;
                     }
                 }

@@ -17,7 +17,7 @@ use crate::engine::ctx::Clock;
 use crate::engine::effect::{io_err, output_closed, RunOutcome};
 use crate::engine::error::EngineError;
 
-use super::render::{pool_delta, write_all_vectored, IoSlice, RawStdout, Render};
+use super::render::{pool_delta, pool_room, write_all_vectored, IoSlice, RawStdout, Render};
 use super::visual::{Span, COPY_BLOCK};
 use super::{Engine, Hooks};
 
@@ -177,6 +177,8 @@ struct Packet {
     spans: Vec<Span>,
     bytes: Vec<u8>,
     slots: usize,
+    /// The pool's capacity (see Render::fit).
+    room: (usize, usize),
 }
 
 struct Ring {
@@ -258,6 +260,7 @@ impl Submitter<'_> {
         self.spans += spans.len();
         self.bytes += bytes.len();
         packet.slots = e.ch.len();
+        packet.room = pool_room(&e.visuals);
         self.head = self.head.wrapping_add(1);
         ring.head.store(self.head, SeqCst);
         if ring.render_sleeping.load(SeqCst) && self.head.wrapping_sub(ring.done.load(Relaxed)) >= WAKE {
@@ -326,6 +329,7 @@ fn render_loop(ring: &Ring, r: &mut Render, prefix: &[u8], main: Thread) -> std:
             // leaves it alone until done moves past it.
             let packet = unsafe { &mut *ring.packets[(done % RING) as usize].get() };
             if result.is_ok() {
+                r.fit(packet.room);
                 r.sync(&packet.spans, &packet.bytes, packet.slots);
                 r.apply(&packet.log);
                 r.render_rows();

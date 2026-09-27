@@ -13,10 +13,11 @@
 //! - characters surely inside the edge by exact integer distance skip the
 //!   hypot fold; beam distances come from a hypot memo over (|dx|, |dy|);
 //! - dimmed visuals are memoized per character (last factor) and by (bright
-//!   visual, factor bits), which fix the symbol and both adjusted colors;
+//!   visual, factor bits), which fix the symbol and both adjusted colors; a
+//!   miss adjusts the pair and interns the visual;
 //! - a frame whose spotlights did not move is skipped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::effects::spotlights::SpotlightsConfig;
 use crate::engine::animation::{Animation, ExistingColorHandling};
@@ -46,24 +47,11 @@ struct Rec {
     over: Visual,
     /// The bright pair's index in `pairs`.
     pair: u32,
-    /// The bright visual's dense index for `dense` (NONE: not there).
-    bidx: u32,
-    /// The symbol's dense index for `vdense` (NONE: not there).
-    sidx: u32,
     /// The last brightness factor's visual (NONE: none yet) and bits.
     dimmed: Visual,
     factor: u64,
     flags: u8,
 }
-
-/// The dense search-phase memo's limits: factors, and bright visuals.
-const DENSE_FACTORS: usize = 256;
-const DENSE_BRIGHTS: usize = 4096;
-const FMAP_BITS: u32 = 9;
-/// The adjusted pairs' dense table: at most this many pairs, and symbols.
-const ADJUSTED_BITS: u32 = 16;
-const ADJUSTED_PAIRS: usize = 1 << (ADJUSTED_BITS - 1);
-const DENSE_SYMS: usize = 64;
 
 const EMPTY: Rec = Rec {
     sym: Sym(0),
@@ -71,8 +59,6 @@ const EMPTY: Rec = Rec {
     dark: Visual(NONE),
     over: Visual(NONE),
     pair: NONE,
-    bidx: NONE,
-    sidx: NONE,
     dimmed: Visual(NONE),
     factor: 0,
     flags: 0,
@@ -240,23 +226,6 @@ struct Lit {
     row: i32,
 }
 
-/// A lit character's visual, or the lookup that finds it.
-#[derive(Clone, Copy)]
-enum Shine {
-    Known(Visual),
-    Dense(u32),
-    Memo,
-}
-
-#[derive(Clone, Copy)]
-struct Pending {
-    /// The character's number (`Spotlights::order`).
-    n: u32,
-    shine: Shine,
-    bits: u64,
-    factor: f64,
-}
-
 /// A pair of generated colors (as adjust_color_brightness makes them) is
 /// packed as (present, rgb) for fg in the low 25 bits and bg above.
 fn unpack(packed: u64) -> (Option<Color>, Option<Color>) {
@@ -294,24 +263,6 @@ pub struct Spotlights {
     pairs: Pairs,
     /// (bright visual, factor bits) -> dimmed visual.
     dimmed: Memo<u32>,
-    /// (bright pair, factor bits) -> adjusted pair index.
-    adjusted: Memo<u32>,
-    /// The adjusted pairs: packed pair -> index, and back.
-    pair_index: Memo<u32>,
-    packed: Vec<u64>,
-    /// (adjusted pair index, symbol index) -> visual (NONE: not yet), a row
-    /// of `syms` per adjusted pair.
-    vdense: Vec<Visual>,
-    syms: usize,
-    /// (symbol, packed adjusted pair) -> visual, for the other symbols.
-    visuals: Memo<u32>,
-    /// While searching (one range): factor bits -> dense factor index + 1,
-    /// open addressing, and (factor index, bright index) -> dimmed visual
-    /// (NONE: not yet), a row of `brights` per factor.
-    fmap: Vec<(u64, u32)>,
-    factors: usize,
-    dense: Vec<Visual>,
-    brights: usize,
     /// The ellipse's max_y_offset by |column offset| for `yoff_range`.
     yoff: Vec<i64>,
     yoff_range: i64,
@@ -349,16 +300,6 @@ impl Spotlights {
             hyp_w: 0,
             pairs: Pairs::default(),
             dimmed: Memo::new(0),
-            adjusted: Memo::new(0),
-            pair_index: Memo::new(0),
-            packed: Vec::new(),
-            vdense: Vec::new(),
-            syms: 0,
-            visuals: Memo::new(0),
-            fmap: Vec::new(),
-            factors: 0,
-            dense: Vec::new(),
-            brights: 0,
             yoff: Vec::new(),
             yoff_range: -1,
             illuminate_range: 1,
@@ -449,17 +390,15 @@ impl Spotlights {
     }
 
     /// The visual of an illuminated character: its bright pair, dimmed past
-    /// the beam's edge by max(1 - (distance - edge) / falloff width, 0.2);
-    /// or, for a dimmed visual not known yet, the lookup to make.
+    /// the beam's edge by max(1 - (distance - edge) / falloff width, 0.2).
     #[inline(always)]
-    fn prepare(&mut self, n: u32, input: Coord) -> Pending {
-        let known = |visual| Pending { n, shine: Shine::Known(visual), bits: 0, factor: 0.0 };
+    fn shine(&mut self, e: &mut Engine, n: u32, input: Coord) -> Visual {
         let rec = *self.recs.at(n);
         if self.expanding && rec.over.0 != NONE {
-            return known(rec.over);
+            return rec.over;
         }
         if rec.flags & FIXED != 0 {
-            return known(rec.bright);
+            return rec.bright;
         }
         let mut nearest = i64::MAX;
         for &c in &self.coords {
@@ -468,148 +407,43 @@ impl Spotlights {
             nearest = nearest.min(dx * dx + dy * dy);
         }
         if (nearest as f64) < self.core2 {
-            return known(rec.bright);
+            return rec.bright;
         }
         let distance = self.distance(input);
         if distance <= self.edge {
-            return known(rec.bright);
+            return rec.bright;
         }
         let factor = (1.0 - (distance - self.edge) / self.falloff_width).max(0.2);
         let bits = factor.to_bits();
         if rec.factor == bits && rec.dimmed.0 != NONE {
-            return known(rec.dimmed);
+            return rec.dimmed;
         }
-        self.recs.at_mut(n).factor = bits;
-        let shine = if rec.bidx != NONE && !self.expanding {
-            self.dense_index(bits, rec.bidx).map_or(Shine::Memo, Shine::Dense)
-        } else {
-            Shine::Memo
-        };
-        Pending { n, shine, bits, factor }
-    }
-
-    #[inline(always)]
-    fn resolve(&mut self, e: &mut Engine, p: Pending) -> Visual {
-        let visual = match p.shine {
-            Shine::Known(visual) => return visual,
-            Shine::Dense(at) => {
-                let visual = *self.dense.at(at);
-                if visual.0 != NONE {
-                    visual
-                } else {
-                    let visual = self.adjusted_visual(e, p.n, p.bits, p.factor);
-                    *self.dense.at_mut(at) = visual;
-                    visual
-                }
-            }
-            Shine::Memo => self.dimmed(e, p.n, p.bits, p.factor),
-        };
-        self.recs.at_mut(p.n).dimmed = visual;
+        let visual = self.dimmed(e, n, bits, factor);
+        let rec = self.recs.at_mut(n);
+        rec.factor = bits;
+        rec.dimmed = visual;
         visual
     }
 
-    /// Memoized by (bright visual, factor), else `adjusted_visual`.
+    /// Memoized by (bright visual, factor), else the pair adjusted and its
+    /// visual interned.
     fn dimmed(&mut self, e: &mut Engine, n: u32, bits: u64, factor: f64) -> Visual {
-        let bright = self.recs.at(n).bright;
-        let at = match self.dimmed.get(bright.0, bits) {
+        let rec = *self.recs.at(n);
+        let at = match self.dimmed.get(rec.bright.0, bits) {
             Ok(visual) => return Visual(visual),
             Err(at) => at,
         };
-        let visual = self.adjusted_visual(e, n, bits, factor);
-        self.dimmed.insert(at, bright.0, bits, visual.0);
+        let (fg, bg) = self.pairs.pairs[rec.pair as usize];
+        let packed = fg.map_or(0, |c| c.adjust(factor)) | bg.map_or(0, |c| c.adjust(factor)) << 25;
+        let (fg, bg) = unpack(packed);
+        debug_assert_eq!((fg, bg), {
+            let (fg, bg) = self.pairs.colors[rec.pair as usize];
+            let adjust = |c: Color| Animation::adjust_color_brightness(&c, factor);
+            (fg.map(adjust), bg.map(adjust))
+        });
+        let visual = e.visuals.make(&e.symbols, VisualInfo { sym: rec.sym, fg, bg, attrs: HAS_COLORS });
+        self.dimmed.insert(at, rec.bright.0, bits, visual.0);
         visual
-    }
-
-    /// The index of (factor, bright index) in `dense`, adding a new factor's
-    /// row; None when the table is full.
-    #[inline]
-    fn dense_index(&mut self, bits: u64, bidx: u32) -> Option<u32> {
-        let mask = (1 << FMAP_BITS) - 1;
-        let mut i = (bits.wrapping_mul(0xff51_afd7_ed55_8ccd) >> (64 - FMAP_BITS)) as usize;
-        let fidx = loop {
-            let (key, fidx) = *self.fmap.at(i);
-            if fidx == 0 {
-                if self.factors == DENSE_FACTORS {
-                    return None;
-                }
-                self.factors += 1;
-                *self.fmap.at_mut(i) = (bits, self.factors as u32);
-                self.dense.resize(self.factors * self.brights, Visual(NONE));
-                break self.factors - 1;
-            }
-            if key == bits {
-                break fidx as usize - 1;
-            }
-            i = (i + 1) & mask;
-        };
-        Some((fidx * self.brights + bidx as usize) as u32)
-    }
-
-    /// The adjusted visual through (bright pair, factor) -> adjusted pair and
-    /// (adjusted pair, symbol) -> visual.
-    fn adjusted_visual(&mut self, e: &mut Engine, n: u32, bits: u64, factor: f64) -> Visual {
-        let rec = *self.recs.at(n);
-        let index = match self.adjusted.get(rec.pair, bits) {
-            Ok(index) => index,
-            Err(at) => {
-                let (fg, bg) = self.pairs.pairs[rec.pair as usize];
-                let fg = fg.map_or(0, |c| c.adjust(factor));
-                let bg = bg.map_or(0, |c| c.adjust(factor));
-                let packed = fg | bg << 25;
-                debug_assert_eq!(unpack(packed), {
-                    let (fg, bg) = self.pairs.colors[rec.pair as usize];
-                    let adjust = |c: Color| Animation::adjust_color_brightness(&c, factor);
-                    (fg.map(adjust), bg.map(adjust))
-                });
-                let index = match self.pair_index.get(0, packed) {
-                    Ok(index) => index,
-                    Err(_) if self.packed.len() == ADJUSTED_PAIRS => {
-                        self.pair_index.clear();
-                        self.packed.clear();
-                        self.vdense.clear();
-                        self.adjusted.clear();
-                        return self.adjusted_visual(e, n, bits, factor);
-                    }
-                    Err(at) => {
-                        let index = self.packed.len() as u32;
-                        self.packed.push(packed);
-                        let len = self.vdense.len();
-                        // inside the capacity (reserved for every pair)
-                        assert!(len + self.syms <= self.vdense.capacity());
-                        self.vdense.resize(len + self.syms, Visual(NONE));
-                        self.pair_index.insert(at, 0, packed, index);
-                        index
-                    }
-                };
-                self.adjusted.insert(at, rec.pair, bits, index);
-                index
-            }
-        };
-        if rec.sidx != NONE {
-            let at = index as usize * self.syms + rec.sidx as usize;
-            let visual = *self.vdense.at(at);
-            if visual.0 != NONE {
-                return visual;
-            }
-            let visual = self.make_visual(e, n, index);
-            *self.vdense.at_mut(at) = visual;
-            return visual;
-        }
-        let sym = rec.sym;
-        let packed = *self.packed.at(index);
-        match self.visuals.get(sym.0, packed) {
-            Ok(visual) => Visual(visual),
-            Err(at) => {
-                let visual = self.make_visual(e, n, index);
-                self.visuals.insert(at, sym.0, packed, visual.0);
-                visual
-            }
-        }
-    }
-
-    fn make_visual(&self, e: &mut Engine, n: u32, index: u32) -> Visual {
-        let (fg, bg) = unpack(*self.packed.at(index));
-        e.visuals.make(&e.symbols, VisualInfo { sym: self.recs.at(n).sym, fg, bg, attrs: HAS_COLORS })
     }
 
     /// SpotlightsIterator.illuminate_chars(illuminate_range), over the canvas
@@ -629,10 +463,6 @@ impl Spotlights {
             return;
         }
         self.lit_as = Some((range, override_on));
-        if self.yoff_range != range {
-            // factors of another range don't come back
-            self.adjusted.clear();
-        }
         self.ellipse(range);
         self.stamp += 1;
         let stamp = self.stamp;
@@ -668,8 +498,7 @@ impl Spotlights {
         }
         for i in 0..self.next.len() {
             let Lit { at, column, row } = *self.next.at(i);
-            let p = self.prepare(at, Coord::new(column as i64, row as i64));
-            let visual = self.resolve(e, p);
+            let visual = self.shine(e, at, Coord::new(column as i64, row as i64));
             e.set_visual(*self.order.at(at), visual);
         }
         for &Lit { at, .. } in &self.lit {
@@ -740,8 +569,7 @@ impl Effect for Spotlights {
         let mut recs = vec![EMPTY; e.char_count()];
         let mut by_row = vec![NONE; (self.width * self.height) as usize];
         let characters = e.get_characters(CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
-        let mut brights: HashMap<Visual, u32, FxBuild> = HashMap::default();
-        let mut syms: HashMap<Sym, u32, FxBuild> = HashMap::default();
+        let mut brights: HashSet<Visual, FxBuild> = HashSet::default();
         self.lit = Vec::with_capacity(characters.len());
         self.next = Vec::with_capacity(characters.len());
         for &slot in &characters {
@@ -765,29 +593,10 @@ impl Effect for Spotlights {
             // _get_expand_color_override: (None, bg) for a bg-only character,
             // (None, None) for one without input colors
             let over = if dynamic && input_fg.is_none() { appearance(e, slot, None, input_bg) } else { Visual(NONE) };
-            let bidx = if flags & FIXED != 0 {
-                NONE
-            } else {
-                let next = brights.len() as u32;
-                let bidx = *brights.entry(bright).or_insert(next);
-                if bidx as usize >= DENSE_BRIGHTS {
-                    NONE
-                } else {
-                    bidx
-                }
-            };
-            let sidx = if flags & FIXED != 0 {
-                NONE
-            } else {
-                let next = syms.len() as u32;
-                let sidx = *syms.entry(e.input_sym(slot)).or_insert(next);
-                if sidx as usize >= DENSE_SYMS {
-                    NONE
-                } else {
-                    sidx
-                }
-            };
-            recs[slot as usize] = Rec { sym: e.input_sym(slot), bright, dark, over, pair, bidx, sidx, flags, ..EMPTY };
+            if flags & FIXED == 0 {
+                brights.insert(bright);
+            }
+            recs[slot as usize] = Rec { sym: e.input_sym(slot), bright, dark, over, pair, flags, ..EMPTY };
             if flags & LIT != 0 {
                 by_row[((input.row - 1) * self.width + (input.column - 1)) as usize] = slot;
             }
@@ -807,21 +616,11 @@ impl Effect for Spotlights {
             }
         }
         self.marks = vec![0; self.order.len()];
-        self.brights = brights.len().min(DENSE_BRIGHTS);
-        self.fmap = vec![(0, 0); 1 << FMAP_BITS];
-        self.factors = 0;
-        self.dense = Vec::with_capacity(DENSE_FACTORS * self.brights);
         self.hyp_w = self.width as usize + 1;
         self.hyp = vec![0.0; self.hyp_w * (self.height as usize + 1)];
-        // room for ~64 factors of every bright visual, and of every pair
-        let bits = |keys: usize| (keys * 128).next_power_of_two().trailing_zeros();
-        self.dimmed = Memo::new(bits(brights.len()).clamp(16, 19));
-        self.adjusted = Memo::new(bits(self.pairs.pairs.len()).clamp(12, 18));
-        self.pair_index = Memo::new(ADJUSTED_BITS);
-        self.packed = Vec::with_capacity(ADJUSTED_PAIRS);
-        self.syms = syms.len().min(DENSE_SYMS);
-        self.vdense = Vec::with_capacity(ADJUSTED_PAIRS * self.syms);
-        self.visuals = Memo::new(if syms.len() > DENSE_SYMS { 18 } else { 1 });
+        // room for ~64 factors of every bright visual
+        let bits = (brights.len() * 128).next_power_of_two().trailing_zeros();
+        self.dimmed = Memo::new(bits.clamp(16, 19));
         // a run makes ~16 dimmed visuals per character
         e.visuals.reserve((e.char_count() * 16).min(200_000), 24);
         let smallest = canvas.right.min(canvas.top);

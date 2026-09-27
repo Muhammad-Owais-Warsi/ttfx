@@ -310,6 +310,23 @@ impl Render {
         self.late.clear();
     }
 
+    /// Room for as many visuals as the pool has (`pool_room`): the copies
+    /// are reserved as large at once, rather than doubling (and copying)
+    /// their way up to it.
+    #[inline]
+    pub(super) fn fit(&mut self, room: (usize, usize)) {
+        if self.spans.capacity() < room.0 || self.bytes.capacity() < room.1 {
+            self.reserve_room(room);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn reserve_room(&mut self, room: (usize, usize)) {
+        self.spans.reserve_exact(room.0.saturating_sub(self.spans.len()));
+        self.bytes.reserve_exact(room.1.saturating_sub(self.bytes.len()));
+    }
+
     #[cold]
     fn grow_slots(&mut self, slots: usize) {
         self.sync(&[], &[], slots.max(self.visual.len() * 2));
@@ -478,6 +495,11 @@ pub(super) fn pool_delta(pool: &VisualPool, spans: usize, bytes: usize) -> (&[Sp
     (&pool.spans[spans..], &pool.bytes[bytes..pool.bytes.len() - COPY_BLOCK])
 }
 
+/// The pool's capacity (spans, bytes) for `Render::fit`.
+pub(super) fn pool_room(pool: &VisualPool) -> (usize, usize) {
+    (pool.spans.capacity(), pool.bytes.capacity())
+}
+
 impl Engine {
     // -------------------------------------------------------------- the log
 
@@ -603,6 +625,7 @@ impl Engine {
     pub fn render_here(&mut self) {
         let r = self.render.back.as_mut().expect("the renderer runs on another thread");
         let (spans, bytes) = pool_delta(&self.visuals, r.spans.len(), r.bytes.len() - COPY_BLOCK);
+        r.fit(pool_room(&self.visuals));
         r.sync(spans, bytes, self.ch.len());
         r.apply(&self.render.log);
         self.render.log.clear();

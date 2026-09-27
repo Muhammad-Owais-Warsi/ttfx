@@ -5,15 +5,14 @@
 //! The key is what the visual *is* (symbol, colors, attributes); the bytes are
 //! a function of it and of the run's color flags, which are fixed.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::engine::animation::CharacterVisual;
 use crate::utils::{ansi, hexterm};
 use crate::utils::graphics::{Color, ColorPair};
 
-use super::{FxBuild, Sym, Symbols};
+use super::{At, Sym, Symbols};
+use crate::utils::hash::FxHasher;
 
 /// A pooled visual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -50,8 +49,7 @@ pub fn color_key(color: Option<Color>) -> u64 {
 
 /// A VisualInfo packed into three words, equal exactly when the infos are:
 /// symbol, attributes and which colors are present, then each color's key
-/// (0 when absent). The pool's map holds these rather than the infos, so a
-/// probe compares 24 bytes in a table half the size.
+/// (0 when absent). A probe compares these rather than the infos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Key([u64; 3]);
 
@@ -65,14 +63,87 @@ impl Key {
             info.bg.map_or(0, |c| c.color_arg.key()),
         ])
     }
+
+    /// The VisualInfo it was made of.
+    fn info(&self) -> VisualInfo {
+        let [head, fg, bg] = self.0;
+        VisualInfo {
+            sym: Sym(head as u32),
+            fg: (head >> 48 & 1 != 0).then(|| Color::from_key(fg)),
+            bg: (head >> 49 & 1 != 0).then(|| Color::from_key(bg)),
+            attrs: (head >> 32) as u16,
+        }
+    }
+
+    /// The table's hash: the index comes from its low bits.
+    #[inline]
+    fn hash(&self) -> u32 {
+        let mut h = FxHasher::default();
+        h.write_u64(self.0[0]);
+        h.write_u64(self.0[1]);
+        h.write_u64(self.0[2]);
+        (h.finish() >> 32) as u32
+    }
 }
 
-impl Hash for Key {
+/// The interning table: open addressing over one word per entry, the key's
+/// hash in the high half and the handle plus one in the low half (0: empty),
+/// so a probe reads the key only on a hash match and growing never reads
+/// keys.
+/// Kept at most half full, doubling from TABLE_INITIAL: its entries are
+/// written where the hashes fall, so a table sized for the run's end up
+/// front would be touched all over from the start.
+struct Table {
+    entries: Vec<u64>,
+    count: usize,
+}
+
+const TABLE_INITIAL: usize = 1 << 15;
+
+impl Table {
+    fn new() -> Self {
+        Table { entries: vec![0; TABLE_INITIAL], count: 0 }
+    }
+
+    /// The handle of `key`, or Err(the empty entry where it goes).
     #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.0[0]);
-        state.write_u64(self.0[1]);
-        state.write_u64(self.0[2]);
+    fn find(&self, key: &Key, hash: u32, keys: &[Key]) -> Result<Visual, usize> {
+        let mask = self.entries.len() - 1;
+        let mut i = hash as usize & mask;
+        loop {
+            let e = *self.entries.at(i);
+            if e == 0 {
+                return Err(i);
+            }
+            if (e >> 32) as u32 == hash && keys.at(e as u32 - 1) == key {
+                return Ok(Visual(e as u32 - 1));
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// Put `visual` in the empty entry `at` found for `hash`.
+    #[inline]
+    fn insert(&mut self, at: usize, hash: u32, visual: Visual) {
+        *self.entries.at_mut(at) = (hash as u64) << 32 | (visual.0 + 1) as u64;
+        self.count += 1;
+        if self.count * 2 > self.entries.len() {
+            self.grow();
+        }
+    }
+
+    #[cold]
+    fn grow(&mut self) {
+        let len = self.entries.len() * 2;
+        let old = std::mem::replace(&mut self.entries, vec![0; len]);
+        let mask = self.entries.len() - 1;
+        for e in old.into_iter().filter(|&e| e != 0) {
+            let mut i = (e >> 32) as usize & mask;
+            while *self.entries.at(i) != 0 {
+                i = (i + 1) & mask;
+            }
+            *self.entries.at_mut(i) = e;
+        }
     }
 }
 
@@ -97,8 +168,10 @@ pub const COPY_BLOCK: usize = 64;
 pub struct VisualPool {
     no_color: bool,
     xterm_colors: bool,
-    map: HashMap<Key, Visual, FxBuild>,
-    pub info: Vec<VisualInfo>,
+    table: Table,
+    /// Every visual's key (`raw` ones too), by handle: its info follows from
+    /// it, so only the key is kept (a new visual writes 24 bytes, not ~70).
+    keys: Vec<Key>,
     pub spans: Vec<Span>,
     /// Formatted bytes of every visual, plus COPY_BLOCK bytes of slack.
     pub bytes: Vec<u8>,
@@ -111,10 +184,8 @@ impl VisualPool {
         VisualPool {
             no_color,
             xterm_colors,
-            // effects with gradients make tens of thousands of visuals: no
-            // rehash until then (the table's entries are touched only as used)
-            map: HashMap::with_capacity_and_hasher(1 << 14, FxBuild::default()),
-            info: Vec::with_capacity(1 << 14),
+            table: Table::new(),
+            keys: Vec::with_capacity(1 << 14),
             spans: Vec::with_capacity(1 << 14),
             bytes: vec![0; COPY_BLOCK],
             max_len: 1,
@@ -123,29 +194,39 @@ impl VisualPool {
 
     /// The visual for these fields, formatting it on first use.
     pub fn make(&mut self, symbols: &Symbols, info: VisualInfo) -> Visual {
-        let VisualPool { map, no_color, xterm_colors, .. } = self;
-        let entry = match map.entry(Key::of(&info)) {
-            Entry::Occupied(o) => return *o.get(),
-            Entry::Vacant(v) => v,
+        let key = Key::of(&info);
+        let hash = key.hash();
+        let at = match self.table.find(&key, hash, &self.keys) {
+            Ok(visual) => return visual,
+            Err(at) => at,
         };
-        let (no_color, xterm_colors) = (*no_color, *xterm_colors);
+        let (no_color, xterm_colors) = (self.no_color, self.xterm_colors);
         let offset = self.bytes.len() - COPY_BLOCK;
-        self.bytes.truncate(offset);
-        format_visual(&mut self.bytes, symbols.get(info.sym), &info, no_color, xterm_colors);
-        let len = self.bytes.len() - offset;
-        self.bytes.resize(self.bytes.len() + COPY_BLOCK, 0);
+        // formatted in place, over the slack and room made past it (a
+        // constant-size extend unless the symbol is long): formatting on
+        // the stack and copying that stalled, as the copy's wide loads
+        // waited on the narrow stores that built it
+        let symbol = symbols.get(info.sym).as_bytes();
+        let most = SGR_MAX + symbol.len() + RESET.len();
+        if most <= ROOM {
+            self.bytes.extend_from_slice(&[0; ROOM]);
+        } else {
+            self.bytes.resize(self.bytes.len() + most, 0);
+        }
+        let len = format_visual(&mut self.bytes[offset..], symbol, &info, no_color, xterm_colors);
+        self.bytes.truncate(offset + len + COPY_BLOCK);
         self.max_len = self.max_len.max(len);
-        let handle = Visual(self.info.len() as u32);
-        self.info.push(info);
+        let handle = Visual(self.keys.len() as u32);
+        self.keys.push(key);
         self.spans.push(Span { offset: offset as u32, len: len as u32 });
-        *entry.insert(handle)
+        self.table.insert(at, hash, handle);
+        handle
     }
 
     /// Room for `additional` more visuals (of about `bytes` bytes each)
-    /// without growing the tables.
+    /// without growing the arrays (the table grows as it fills).
     pub fn reserve(&mut self, additional: usize, bytes: usize) {
-        self.map.reserve(additional);
-        self.info.reserve(additional);
+        self.keys.reserve(additional);
         self.spans.reserve(additional);
         self.bytes.reserve(additional * bytes);
     }
@@ -170,15 +251,14 @@ impl VisualPool {
         let len = self.bytes.len() - offset;
         self.bytes.resize(self.bytes.len() + COPY_BLOCK, 0);
         self.max_len = self.max_len.max(len);
-        let handle = Visual(self.info.len() as u32);
-        self.info.push(info);
+        let handle = Visual(self.keys.len() as u32);
+        self.keys.push(Key::of(&info));
         self.spans.push(Span { offset: offset as u32, len: len as u32 });
         handle
     }
 
-    #[inline]
-    pub fn info(&self, visual: Visual) -> &VisualInfo {
-        &self.info[visual.0 as usize]
+    pub fn info(&self, visual: Visual) -> VisualInfo {
+        self.keys[visual.0 as usize].info()
     }
 
     #[inline]
@@ -218,11 +298,12 @@ pub fn info_of(symbols: &mut Symbols, visual: &CharacterVisual) -> VisualInfo {
 
 /// CharacterVisual.format_symbol_into for these fields: the SGR attributes
 /// in upstream's fixed order (`dim` intentionally omitted), the colors, the
-/// symbol, and a reset when anything came before it.
-fn format_visual(out: &mut Vec<u8>, symbol: &str, info: &VisualInfo, no_color: bool, xterm: bool) {
-    // the attributes and colors, at most 7 * 5 + 2 * 19 bytes, go through a
-    // buffer on the stack
-    let mut sgr = Sgr { buf: [0; 80], len: 0 };
+/// symbol, and a reset when anything came before it: written from the start
+/// of `out`, which has room for SGR_MAX + the symbol + the reset; returns
+/// the length.
+fn format_visual(out: &mut [u8], symbol: &[u8], info: &VisualInfo, no_color: bool, xterm: bool) -> usize {
+    debug_assert_eq!(RESET, ansi::RESET_ALL.as_bytes());
+    let mut sgr = Sgr { buf: out, len: 0 };
     for (bit, code) in [
         (BOLD, ansi::BOLD),
         (ITALIC, ansi::ITALIC),
@@ -244,20 +325,33 @@ fn format_visual(out: &mut Vec<u8>, symbol: &str, info: &VisualInfo, no_color: b
             sgr.color(bg, b"48", xterm);
         }
     }
-    out.extend_from_slice(&sgr.buf[..sgr.len]);
-    out.extend_from_slice(symbol.as_bytes());
-    if sgr.len != 0 {
-        out.extend_from_slice(ansi::RESET_ALL.as_bytes());
+    let colored = sgr.len != 0;
+    // a byte at a time: symbols are short, and a copy of a run-time length
+    // is a memcpy call
+    for &b in symbol {
+        sgr.buf[sgr.len] = b;
+        sgr.len += 1;
     }
+    if colored {
+        sgr.put(RESET);
+    }
+    sgr.len
 }
 
-/// A visual's SGR sequences before its symbol.
-struct Sgr {
-    buf: [u8; 80],
+/// The attributes and colors: at most 7 * 5 + 2 * 19 bytes.
+const SGR_MAX: usize = 80;
+/// ansi::RESET_ALL.
+const RESET: &[u8; 4] = b"\x1b[0m";
+/// Room made past the slack for a visual formatted in place.
+const ROOM: usize = 128;
+
+/// A visual's bytes, written in place.
+struct Sgr<'a> {
+    buf: &'a mut [u8],
     len: usize,
 }
 
-impl Sgr {
+impl Sgr<'_> {
     /// Fixed-size copies (a copy of a length only known at run time would
     /// be a memcpy call).
     #[inline(always)]
@@ -323,3 +417,31 @@ static DECIMAL: [([u8; 3], u8); 256] = {
     }
     t
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every field of a VisualInfo comes back from its key (Color's own
+    /// equality compares the argument only, so compare the Debug forms).
+    #[test]
+    fn key_round_trips() {
+        let colors = [
+            None,
+            Some(Color::from_rgb(0, 0, 0)),
+            Some(Color::from_rgb(0xab, 0x12, 0xff)),
+            Some(Color::from_xterm(0)),
+            Some(Color::from_xterm(255)),
+            Some(Color::from_hex("#FfA0b1").unwrap()),
+            Some(Color::from_hex("00ff00").unwrap()),
+        ];
+        for fg in colors {
+            for bg in colors {
+                for attrs in [0, BOLD | HAS_COLORS, HAS_COLORS | STRIKE | DIM, 0x1ff] {
+                    let info = VisualInfo { sym: Sym(123_456), fg, bg, attrs };
+                    assert_eq!(format!("{:?}", Key::of(&info).info()), format!("{info:?}"));
+                }
+            }
+        }
+    }
+}

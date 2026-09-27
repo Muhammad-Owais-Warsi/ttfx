@@ -139,12 +139,16 @@ impl Color {
     /// Construct a generated color without formatting and reparsing its channels.
     /// The lowercase hex argument is observable in color equality and hashing.
     pub(crate) fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut bytes = [0; 7];
-        for (index, channel) in [red, green, blue].into_iter().enumerate() {
-            bytes[index * 2] = HEX[(channel >> 4) as usize];
-            bytes[index * 2 + 1] = HEX[(channel & 15) as usize];
+        // the six digits worked out in one word, a nibble per byte (stored a
+        // byte at a time, they stalled the key's word load that follows)
+        let v = (red as u64) << 16 | (green as u64) << 8 | blue as u64;
+        let mut nibbles = 0;
+        for i in 0..6 {
+            nibbles |= (v >> (20 - 4 * i) & 15) << (8 * i);
         }
+        let letters = (nibbles + 0x0606_0606_0606) >> 4 & 0x0101_0101_0101;
+        let digits = (nibbles + 0x3030_3030_3030 + letters * 0x27).to_le_bytes();
+        let bytes = [digits[0], digits[1], digits[2], digits[3], digits[4], digits[5], 0];
         let rgb_color = RgbString { bytes, len: 6 };
         Color {
             color_arg: ColorArg::Hex(rgb_color),
@@ -185,6 +189,22 @@ impl Color {
 
     pub fn rgb_ints(&self) -> (u8, u8, u8) {
         (self.rgb[0], self.rgb[1], self.rgb[2])
+    }
+
+    /// The color whose `color_arg.key()` is `key`: every field follows from
+    /// the argument, as from_xterm and from_hex make it.
+    pub fn from_key(key: u64) -> Self {
+        if key >> 63 != 0 {
+            return Color::from_xterm(key as u8);
+        }
+        let b = key.to_le_bytes();
+        let rgb_color = RgbString { bytes: [b[0], b[1], b[2], b[3], b[4], b[5], b[6]], len: b[7] };
+        Color {
+            color_arg: ColorArg::Hex(rgb_color),
+            xterm_color: None,
+            rgb: Self::parse_rgb(&rgb_color),
+            rgb_color,
+        }
     }
 
     fn parse_rgb(s: &str) -> [u8; 3] {
@@ -594,5 +614,15 @@ mod tests {
             format!("{color:?}"),
             "Color { color_arg: Hex(\"12AbEf7\"), xterm_color: None, rgb_color: \"12AbEf7\" }"
         );
+    }
+
+    #[test]
+    fn from_rgb_is_lowercase_hex() {
+        for v in (0..1u32 << 24).step_by(4099).chain([0, 0xffffff, 0x0a0b0c, 0x9fa0af]) {
+            let (r, g, b) = ((v >> 16) as u8, (v >> 8) as u8, v as u8);
+            let c = Color::from_rgb(r, g, b);
+            assert_eq!(&*c.rgb_color, format!("{r:02x}{g:02x}{b:02x}"));
+            assert_eq!(c.rgb_ints(), (r, g, b));
+        }
     }
 }

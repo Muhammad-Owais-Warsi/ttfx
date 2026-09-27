@@ -458,7 +458,7 @@ impl Engine {
     pub fn add_frame_visual(&mut self, scene: SceneId, visual: Visual, duration: i64) -> Result<(), String> {
         let flags = self.scenes.recs[scene as usize].flags;
         if flags & (SCF_PREEXISTING | SCF_PRE_BOLD) != 0 {
-            let info = *self.visuals.info(visual);
+            let info = self.visuals.info(visual);
             return self.add_frame(scene, info.sym, duration, info.colors(), info.attrs & !HAS_COLORS);
         }
         if duration < 1 {

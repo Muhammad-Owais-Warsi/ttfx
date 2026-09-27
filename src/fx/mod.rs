@@ -554,7 +554,7 @@ impl Engine {
     }
 
     #[inline]
-    pub fn visual_info(&self, visual: Visual) -> &VisualInfo {
+    pub fn visual_info(&self, visual: Visual) -> VisualInfo {
         self.visuals.info(visual)
     }
 

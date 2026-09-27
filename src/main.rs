@@ -138,26 +138,33 @@ fn main() -> ExitCode {
         ttfx::install_sigwinch_handler();
     }
 
-    let result = loop {
-        // The assembly engine takes the run when it has this effect and this
-        // CPU runs one of its tiers; otherwise it declines untouched.
-        let offered = ttfx::asm::try_run(ttfx::asm::Run {
+    // The engines in the order they are offered the run: fx, the assembly
+    // engine, the old engine (the assembly engine first under TTFX_ASM=1).
+    // The assembly engine takes a run when it has the effect and this CPU runs
+    // one of its tiers; otherwise it declines untouched.
+    let asm_first = ttfx::asm::first();
+    let offer_asm = |config: &engine::terminal::TerminalConfig, rng: &mut ttfx::utils::rng::Rng| {
+        ttfx::asm::try_run(ttfx::asm::Run {
             effect: effect_command,
             input: &input_data,
-            config: &config,
-            rng: &mut rng,
+            config,
+            rng,
             parity_dump: cli.parity_dump,
             virtual_clock: cli.virtual_clock,
             max_frames: cli.max_frames,
             tty_output,
-        });
-        match offered {
-            Some(Ok(ttfx::engine::effect::RunOutcome::TerminalResized)) => {
-                config.reuse_canvas = false;
-                continue;
+        })
+    };
+    let result = loop {
+        if asm_first {
+            match offer_asm(&config, &mut rng) {
+                Some(Ok(ttfx::engine::effect::RunOutcome::TerminalResized)) => {
+                    config.reuse_canvas = false;
+                    continue;
+                }
+                Some(done) => break done.map(|_| ()),
+                None => {}
             }
-            Some(done) => break done.map(|_| ()),
-            None => {}
         }
 
         let clock = if cli.parity_dump || cli.virtual_clock {
@@ -193,6 +200,16 @@ fn main() -> ExitCode {
                     forget_engine(effect, engine);
                     break done.map(|_| ());
                 }
+            }
+        }
+        if !asm_first {
+            match offer_asm(&config, &mut rng) {
+                Some(Ok(ttfx::engine::effect::RunOutcome::TerminalResized)) => {
+                    config.reuse_canvas = false;
+                    continue;
+                }
+                Some(done) => break done.map(|_| ()),
+                None => {}
             }
         }
         let mut ctx = match ttfx::engine::ctx::EngineCtx::new(

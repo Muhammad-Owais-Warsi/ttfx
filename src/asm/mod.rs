@@ -1,13 +1,15 @@
 //! In-process dispatch to the x86-64 assembly engine (asm/, plans/asm-x86.md).
 //!
 //! Rust stays the front end: it parses the command line, reads and validates
-//! the input, seeds the RNG and installs the signal handlers. Each run is then
-//! offered to the assembly engine, which either declines before doing anything
-//! observable — so the Rust engine runs it instead — or runs the effect to the
-//! end and reports how it ended. Output is byte-identical either way.
+//! the input, seeds the RNG and installs the signal handlers. A run the fx
+//! engine declines is then offered to the assembly engine, which either
+//! declines before doing anything observable — so the old Rust engine runs it
+//! instead — or runs the effect to the end and reports how it ended. Output is
+//! byte-identical either way.
 //!
-//! `TTFX_ASM=0` forces the Rust engine; `TTFX_ASM=force` turns a decline into
-//! an error, so tests cannot silently fall back.
+//! `TTFX_ASM=0` forces the Rust engines; `TTFX_ASM=1` offers every run to the
+//! assembly engine ahead of fx; `TTFX_ASM=force` does too and turns a decline
+//! into an error, so tests cannot silently fall back.
 //!
 //! The engine is assembled once per x86-64 level (v1 = SSE2, v2, v3 = AVX2,
 //! v4 = AVX-512), and the best one the CPU supports runs; every tier's output
@@ -37,6 +39,13 @@ pub struct Run<'a> {
     pub virtual_clock: bool,
     pub max_frames: Option<u64>,
     pub tty_output: bool,
+}
+
+/// Whether the assembly engine gets the first offer (`TTFX_ASM=1`, `on` or
+/// `force`). By default the fx engine runs first and the assembly engine is
+/// only offered the runs fx declines.
+pub fn first() -> bool {
+    matches!(std::env::var("TTFX_ASM").as_deref(), Ok("1" | "on" | "force"))
 }
 
 /// Run the effect on the assembly engine when it can take it. None means the

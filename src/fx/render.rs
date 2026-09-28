@@ -1229,17 +1229,36 @@ impl std::io::Write for RawStdout {
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
-        unsafe extern "C" {
-            fn writev(fd: i32, iov: *const IoSlice<'_>, iovcnt: i32) -> isize;
+        #[cfg(unix)]
+        {
+            unsafe extern "C" {
+                fn writev(fd: i32, iov: *const IoSlice<'_>, iovcnt: i32) -> isize;
+            }
+            // IOV_MAX is 1024 on Linux and macOS
+            let count = bufs.len().min(1024) as i32;
+            // SAFETY: IoSlice is ABI-compatible with struct iovec on Unix.
+            let n = unsafe { writev(1, bufs.as_ptr(), count) };
+            if n < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(n as usize)
+            }
         }
-        // IOV_MAX is 1024 on Linux and macOS
-        let count = bufs.len().min(1024) as i32;
-        // SAFETY: IoSlice is ABI-compatible with struct iovec on Unix.
-        let n = unsafe { writev(1, bufs.as_ptr(), count) };
-        if n < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(n as usize)
+        #[cfg(not(unix))]
+        {
+            // No writev off Unix (Windows fork): plain writes of the same
+            // bytes through stdout, flushed so frames still go out whole.
+            let mut out = std::io::stdout().lock();
+            let mut n = 0;
+            for b in bufs {
+                let w = std::io::Write::write(&mut out, b)?;
+                n += w;
+                if w < b.len() {
+                    break;
+                }
+            }
+            std::io::Write::flush(&mut out)?;
+            Ok(n)
         }
     }
 

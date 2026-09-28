@@ -84,6 +84,9 @@ Measured on an AMD Ryzen 9 9955HX with ttfx 0.5.0 against TerminalTextEffects 0.
 two. Reproduce it with `tools/fx/speed.py --python` (see `tools/fx/speed.py --help` for installing
 Python TTE).
 
+For energy rather than speed, `python3 tools/tests/bench_energy.py [effect ...]` reports the
+joules one paced run costs, read from the CPU's RAPL counters (Linux, needs root to read them).
+
 ## The effects
 
 All 37, each animating the Omarchy logo. Every frame below came out of the Rust binary — and is

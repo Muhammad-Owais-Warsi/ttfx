@@ -36,7 +36,7 @@
           '';
           meta = with pkgs.lib; {
             description = "Terminal text effects — a Rust port of terminaltexteffects (TTE)";
-            homepage = "https://github.com/omacom-io/ttfx";
+            homepage = "https://github.com/omacom/ttfx";
             license = licenses.mit;
             mainProgram = "ttfx";
           };

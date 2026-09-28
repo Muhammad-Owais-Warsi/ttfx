@@ -31,7 +31,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CLOCKED = {"matrix", "thunderstorm"}  # read the clock: time them on the virtual one
 
-p = argparse.ArgumentParser()
+p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument("--bin", default=os.path.join(ROOT, "target/release/ttfx"))
 p.add_argument("--core", default=os.environ.get("SPEED_CORE", "8"))
 p.add_argument("--runs", type=int, default=5)

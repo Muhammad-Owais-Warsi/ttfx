@@ -46,6 +46,7 @@ pub enum Easing {
 }
 
 impl Easing {
+
     /// CLI parser for the 31 named functions (argutils.Ease.type_parser).
     pub fn parse(s: &str) -> Option<Easing> {
         Some(match s.to_lowercase().as_str() {

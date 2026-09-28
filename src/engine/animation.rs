@@ -25,6 +25,34 @@ pub enum SyncMetric {
     Step,
 }
 
+#[inline]
+pub(crate) fn resolve_color_code(
+    color: Option<&Color>,
+    no_color: bool,
+    use_xterm_colors: bool,
+    reusable: Option<ColorCode>,
+) -> Option<ColorCode> {
+    let color = color?;
+    if no_color {
+        return None;
+    }
+    if use_xterm_colors {
+        return Some(ColorCode::Xterm(
+            color
+                .xterm_color
+                .unwrap_or_else(|| hexterm::hex_to_xterm(&color.rgb_color)),
+        ));
+    }
+    let hex = match reusable {
+        Some(ColorCode::Rgb(mut hex)) => {
+            color.rgb_color.as_ref().clone_into(&mut hex);
+            hex
+        }
+        _ => color.rgb_color.as_ref().to_owned(),
+    };
+    Some(ColorCode::Rgb(hex))
+}
+
 thread_local! {
     /// Reused assembly buffer for CharacterVisual::new's SGR string.
     static FORMAT_SCRATCH: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -38,11 +66,15 @@ const INLINE_SYMBOL_CAPACITY: usize = 63;
 ///
 /// The frame writer emits one of these per visible cell — millions of times
 /// over a run — and a `str` copy of a couple of dozen bytes is dominated by the
-/// memcpy call itself. An inline buffer of fixed size lets the writer copy the
-/// whole block unconditionally and then advance by the real length.
+/// memcpy call itself. An inline buffer lets the writer copy a fixed block and
+/// then advance by the real length. The common foreground-only
+/// case fits in 32 bytes; heavily styled symbols use the full inline buffer.
 #[derive(Debug, Clone)]
 pub enum FormattedSymbol {
-    Inline { bytes: [u8; INLINE_SYMBOL_CAPACITY], len: u8 },
+    Inline {
+        bytes: [u8; INLINE_SYMBOL_CAPACITY],
+        len: u8,
+    },
     Heap(Box<str>),
 }
 
@@ -51,7 +83,10 @@ impl FormattedSymbol {
         if text.len() <= INLINE_SYMBOL_CAPACITY {
             let mut bytes = [0u8; INLINE_SYMBOL_CAPACITY];
             bytes[..text.len()].copy_from_slice(text.as_bytes());
-            FormattedSymbol::Inline { bytes, len: text.len() as u8 }
+            FormattedSymbol::Inline {
+                bytes,
+                len: text.len() as u8,
+            }
         } else {
             FormattedSymbol::Heap(text.into())
         }
@@ -68,25 +103,18 @@ impl FormattedSymbol {
         }
     }
 
-    /// Append to a UTF-8 byte buffer, copying the whole inline block in one go.
+    /// Append a fixed-size block, then discard its unused padding.
     #[inline]
     pub fn append_to(&self, out: &mut Vec<u8>) {
         match self {
             FormattedSymbol::Inline { bytes, len } => {
-                if out.len() + INLINE_SYMBOL_CAPACITY > out.capacity() {
-                    out.reserve(INLINE_SYMBOL_CAPACITY);
-                }
                 let start = out.len();
-                // SAFETY: the reserve above guarantees room for the whole block;
-                // only the first `len` bytes are published as initialized.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        out.as_mut_ptr().add(start),
-                        INLINE_SYMBOL_CAPACITY,
-                    );
-                    out.set_len(start + *len as usize);
+                if *len <= 32 {
+                    out.extend_from_slice(&bytes[..32]);
+                } else {
+                    out.extend_from_slice(bytes);
                 }
+                out.truncate(start + *len as usize);
             }
             FormattedSymbol::Heap(text) => out.extend_from_slice(text.as_bytes()),
         }
@@ -99,8 +127,25 @@ impl PartialEq for FormattedSymbol {
     }
 }
 
+/// Direct-mapped cache in front of the pool for `set_appearance`, keyed on its
+/// inputs so a hit skips building, hashing and allocating the visual.
+type AppearanceMemo = Vec<Option<(ColorPair, u8, Visual)>>;
+
+type VisualPool = std::collections::HashSet<Visual, crate::utils::hash::FxBuild>;
+
+/// A pooled, immutable visual. Pooled visuals live for the rest of the process
+/// (the pool holds one per distinct appearance), so handles are plain `Copy`
+/// references: no refcount traffic, and pointer equality is byte equality.
+pub type Visual = &'static CharacterVisual;
+
+thread_local! {
+    /// Every visual built this run, deduplicated.
+    static VISUAL_POOL: std::cell::RefCell<VisualPool> = std::cell::RefCell::new(VisualPool::default());
+    static APPEARANCE_MEMO: std::cell::RefCell<AppearanceMemo> = std::cell::RefCell::new(vec![None; 4096]);
+}
+
 /// animation.CharacterVisual with the formatted ANSI string precomputed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CharacterVisual {
     pub symbol: String,
     pub bold: bool,
@@ -115,6 +160,48 @@ pub struct CharacterVisual {
     pub fg_color_code: Option<ColorCode>,
     pub bg_color_code: Option<ColorCode>,
     pub formatted_symbol: FormattedSymbol,
+}
+
+/// Equality and hashing cover the logical fields only: `formatted_symbol` is
+/// a pure function of them, and pool lookups happen before formatting.
+impl PartialEq for CharacterVisual {
+    fn eq(&self, other: &Self) -> bool {
+        self.symbol == other.symbol
+            && self.bold == other.bold
+            && self.dim == other.dim
+            && self.italic == other.italic
+            && self.underline == other.underline
+            && self.blink == other.blink
+            && self.reverse == other.reverse
+            && self.hidden == other.hidden
+            && self.strike == other.strike
+            && self.colors == other.colors
+            && self.fg_color_code == other.fg_color_code
+            && self.bg_color_code == other.bg_color_code
+    }
+}
+impl Eq for CharacterVisual {}
+
+impl std::hash::Hash for CharacterVisual {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.symbol.hash(state);
+        let flags = [
+            self.bold,
+            self.dim,
+            self.italic,
+            self.underline,
+            self.blink,
+            self.reverse,
+            self.hidden,
+            self.strike,
+        ]
+        .iter()
+        .fold(0u8, |acc, &flag| acc << 1 | flag as u8);
+        state.write_u8(flags);
+        self.colors.hash(state);
+        self.fg_color_code.hash(state);
+        self.bg_color_code.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -134,8 +221,34 @@ pub struct VisualParams {
 
 impl CharacterVisual {
     pub fn new(symbol: &str, p: VisualParams) -> Self {
-        let mut vis = CharacterVisual {
-            symbol: symbol.to_string(),
+        Self::with_symbol(symbol.to_owned(), p)
+    }
+
+    /// The pooled visual for these fields, formatting it only on first use.
+    pub fn interned(symbol: String, p: VisualParams) -> Visual {
+        let candidate = Self::unformatted(symbol, p);
+        VISUAL_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if let Some(&existing) = pool.get(&candidate) {
+                return existing;
+            }
+            let mut visual = candidate;
+            visual.format();
+            let visual: Visual = Box::leak(Box::new(visual));
+            pool.insert(visual);
+            visual
+        })
+    }
+
+    fn with_symbol(symbol: String, p: VisualParams) -> Self {
+        let mut vis = Self::unformatted(symbol, p);
+        vis.format();
+        vis
+    }
+
+    fn unformatted(symbol: String, p: VisualParams) -> Self {
+        CharacterVisual {
+            symbol,
             bold: p.bold,
             dim: p.dim,
             italic: p.italic,
@@ -147,17 +260,22 @@ impl CharacterVisual {
             colors: p.colors,
             fg_color_code: p.fg_color_code,
             bg_color_code: p.bg_color_code,
-            formatted_symbol: FormattedSymbol::Inline { bytes: [0; INLINE_SYMBOL_CAPACITY], len: 0 },
-        };
-        // Effects rebuild visuals every frame, so the SGR string is assembled in
-        // a reused scratch buffer rather than a fresh allocation per visual.
+            formatted_symbol: FormattedSymbol::Inline {
+                bytes: [0; INLINE_SYMBOL_CAPACITY],
+                len: 0,
+            },
+        }
+    }
+
+    fn format(&mut self) {
+        // The SGR string is assembled in a reused scratch buffer rather than a
+        // fresh allocation per visual.
         FORMAT_SCRATCH.with(|scratch| {
             let mut scratch = scratch.borrow_mut();
             scratch.clear();
-            vis.format_symbol_into(&mut scratch);
-            vis.formatted_symbol = FormattedSymbol::new(&scratch);
+            self.format_symbol_into(&mut scratch);
+            self.formatted_symbol = FormattedSymbol::new(&scratch);
         });
-        vis
     }
 
     pub fn plain(symbol: &str) -> Self {
@@ -166,7 +284,7 @@ impl CharacterVisual {
 
     /// SGR emission in upstream's fixed order; `dim` intentionally omitted;
     /// bare symbol when nothing applies.
-    fn format_symbol_into(&self, fmt: &mut String) {
+    pub(crate) fn format_symbol_into(&self, fmt: &mut String) {
         if self.bold {
             fmt.push_str(ansi::BOLD);
         }
@@ -206,7 +324,7 @@ impl CharacterVisual {
 /// upstream object-identity semantics of frame_index_map.
 #[derive(Debug, Clone)]
 pub struct Frame {
-    pub character_visual: Rc<CharacterVisual>,
+    pub character_visual: Visual,
     pub duration: i64,
     pub ticks_elapsed: i64,
 }
@@ -264,23 +382,18 @@ impl Scene {
     /// Scene._get_color_code. Upstream memoizes into a process-global ClassVar
     /// dict; the memo is value-transparent so we just recompute.
     fn get_color_code(&self, color: Option<&Color>) -> Option<ColorCode> {
-        let color = color?;
-        if self.no_color {
-            return None;
-        }
-        if self.use_xterm_colors {
-            if let Some(code) = color.xterm_color {
-                return Some(ColorCode::Xterm(code));
-            }
-            return Some(ColorCode::Xterm(hexterm::hex_to_xterm(&color.rgb_color)));
-        }
-        Some(ColorCode::Rgb(color.rgb_color.to_string()))
+        resolve_color_code(color, self.no_color, self.use_xterm_colors, None)
     }
 
     /// Scene.add_frame with the preexisting-color/bold overrides.
-    pub fn add_frame(&mut self, symbol: &str, duration: i64, mut params: VisualParams) -> Result<(), String> {
+    pub fn add_frame(
+        &mut self,
+        symbol: &str,
+        duration: i64,
+        mut params: VisualParams,
+    ) -> Result<(), String> {
         if let Some(pre) = &self.preexisting_colors {
-            params.colors = Some(pre.clone());
+            params.colors = Some(*pre);
         }
         if self.preexisting_bold {
             params.bold = true;
@@ -293,11 +406,17 @@ impl Scene {
             params.bg_color_code = None;
         }
         if duration < 1 {
-            return Err(format!("Frame duration must be at least 1. Received: {duration}"));
+            return Err(format!(
+                "Frame duration must be at least 1. Received: {duration}"
+            ));
         }
-        let visual = CharacterVisual::new(symbol, params);
+        let visual = CharacterVisual::interned(symbol.to_owned(), params);
         let frame_index = self.all_frames.len();
-        self.all_frames.push(Frame { character_visual: Rc::new(visual), duration, ticks_elapsed: 0 });
+        self.all_frames.push(Frame {
+            character_visual: visual,
+            duration,
+            ticks_elapsed: 0,
+        });
         self.frames.push_back(frame_index);
         for _ in 0..duration {
             self.frame_index_map.push(frame_index);
@@ -307,22 +426,23 @@ impl Scene {
     }
 
     /// Scene.activate: first frame's visual, error when empty.
-    pub fn activate(&self) -> Result<Rc<CharacterVisual>, String> {
+    pub fn activate(&self) -> Result<Visual, String> {
         match self.frames.front() {
-            Some(&idx) => Ok(self.all_frames[idx].character_visual.clone()),
+            Some(&idx) => Ok(self.all_frames[idx].character_visual),
             None => Err(format!("Scene {} has no frames.", self.scene_id)),
         }
     }
 
     /// Scene.get_next_visual: tick the head frame, retiring it (and looping)
     /// exactly as upstream.
-    pub fn get_next_visual(&mut self) -> Rc<CharacterVisual> {
+    pub fn get_next_visual(&mut self) -> Visual {
         let head = self.frames[0];
-        let next_visual = self.all_frames[head].character_visual.clone();
+        let next_visual = self.all_frames[head].character_visual;
         self.all_frames[head].ticks_elapsed += 1;
         if self.all_frames[head].ticks_elapsed == self.all_frames[head].duration {
             self.all_frames[head].ticks_elapsed = 0;
-            self.played_frames.push_back(self.frames.pop_front().unwrap());
+            self.played_frames
+                .push_back(self.frames.pop_front().unwrap());
             if self.is_looping && self.frames.is_empty() {
                 self.frames.append(&mut self.played_frames);
             }
@@ -339,14 +459,16 @@ impl Scene {
         fg_gradient: Option<&Gradient>,
         bg_gradient: Option<&Gradient>,
     ) -> Result<(), String> {
-        fn cyclic_distribution<T: Clone, R: Clone>(larger: &[T], smaller: &[R]) -> Vec<(T, R)> {
+        fn cyclic_distribution<'a, T, R>(
+            larger: &'a [T],
+            smaller: &'a [R],
+        ) -> impl Iterator<Item = (&'a T, &'a R)> {
             let repeat_factor = larger.len() / smaller.len();
             let mut overflow_count = larger.len() % smaller.len();
             let mut overflow_used = false;
             let mut smaller_index = 0usize;
             let mut current_repeat_factor = 0usize;
-            let mut out = Vec::with_capacity(larger.len());
-            for element in larger {
+            larger.iter().map(move |element| {
                 if current_repeat_factor >= repeat_factor {
                     if overflow_count > 0 {
                         if overflow_used {
@@ -363,9 +485,8 @@ impl Scene {
                     }
                 }
                 current_repeat_factor += 1;
-                out.push((element.clone(), smaller[smaller_index].clone()));
-            }
-            out
+                (element, &smaller[smaller_index])
+            })
         }
 
         let fg_has = fg_gradient.is_some_and(|g| !g.spectrum.is_empty());
@@ -381,7 +502,9 @@ impl Scene {
         }
         for symbol in symbols {
             if symbol.chars().count() > 1 {
-                return Err(format!("Symbol must be a string with a length of 1. Received: `{symbol}`."));
+                return Err(format!(
+                    "Symbol must be a string with a length of 1. Received: `{symbol}`."
+                ));
             }
         }
         let color_pairs: Vec<ColorPair> = if fg_has && bg_has {
@@ -389,28 +512,50 @@ impl Scene {
             let bg = &bg_gradient.unwrap().spectrum;
             if fg.len() >= bg.len() {
                 cyclic_distribution(fg, bg)
-                    .into_iter()
-                    .map(|(f, b)| ColorPair::new(Some(f), Some(b)))
+                    .map(|(f, b)| ColorPair::new(Some(*f), Some(*b)))
                     .collect()
             } else {
                 cyclic_distribution(bg, fg)
-                    .into_iter()
-                    .map(|(b, f)| ColorPair::new(Some(f), Some(b)))
+                    .map(|(b, f)| ColorPair::new(Some(*f), Some(*b)))
                     .collect()
             }
         } else if fg_has {
-            fg_gradient.unwrap().spectrum.iter().map(|c| ColorPair::new(Some(c.clone()), None)).collect()
+            fg_gradient
+                .unwrap()
+                .spectrum
+                .iter()
+                .map(|c| ColorPair::new(Some(*c), None))
+                .collect()
         } else {
-            bg_gradient.unwrap().spectrum.iter().map(|c| ColorPair::new(None, Some(c.clone()))).collect()
+            bg_gradient
+                .unwrap()
+                .spectrum
+                .iter()
+                .map(|c| ColorPair::new(None, Some(*c)))
+                .collect()
         };
 
         if symbols.len() >= color_pairs.len() {
             for (symbol, colors) in cyclic_distribution(symbols, &color_pairs) {
-                self.add_frame(&symbol, duration, VisualParams { colors: Some(colors), ..Default::default() })?;
+                self.add_frame(
+                    symbol,
+                    duration,
+                    VisualParams {
+                        colors: Some(*colors),
+                        ..Default::default()
+                    },
+                )?;
             }
         } else {
             for (colors, symbol) in cyclic_distribution(&color_pairs, symbols) {
-                self.add_frame(&symbol, duration, VisualParams { colors: Some(colors), ..Default::default() })?;
+                self.add_frame(
+                    symbol,
+                    duration,
+                    VisualParams {
+                        colors: Some(*colors),
+                        ..Default::default()
+                    },
+                )?;
             }
         }
         Ok(())
@@ -421,8 +566,7 @@ impl Scene {
     pub fn reset_scene(&mut self) {
         // Remaining frames get ticks_elapsed zeroed as they move to played;
         // already-played frames were zeroed when they retired.
-        let remaining: Vec<usize> = self.frames.drain(..).collect();
-        for &idx in &remaining {
+        for idx in self.frames.drain(..) {
             self.all_frames[idx].ticks_elapsed = 0;
             self.played_frames.push_back(idx);
         }
@@ -443,7 +587,7 @@ pub struct Animation {
     pub input_bg_color: Option<Color>,
     pub input_bold: bool,
     pub active_scene_current_step: i64,
-    pub current_character_visual: Rc<CharacterVisual>,
+    pub current_character_visual: Visual,
 }
 
 impl Animation {
@@ -458,24 +602,17 @@ impl Animation {
             input_bg_color: None,
             input_bold: false,
             active_scene_current_step: 0,
-            current_character_visual: Rc::new(CharacterVisual::plain(input_symbol)),
+            current_character_visual: CharacterVisual::interned(
+                input_symbol.to_owned(),
+                VisualParams::default(),
+            ),
         }
     }
 
     /// Animation._get_color_code (identical logic to Scene's; the upstream
     /// per-instance memo is value-transparent and omitted).
     pub fn get_color_code(&mut self, color: Option<&Color>) -> Option<ColorCode> {
-        let color = color?;
-        if self.no_color {
-            return None;
-        }
-        if self.use_xterm_colors {
-            if let Some(code) = color.xterm_color {
-                return Some(ColorCode::Xterm(code));
-            }
-            return Some(ColorCode::Xterm(hexterm::hex_to_xterm(&color.rgb_color)));
-        }
-        Some(ColorCode::Rgb(color.rgb_color.to_string()))
+        resolve_color_code(color, self.no_color, self.use_xterm_colors, None)
     }
 
     /// Animation.new_scene: auto-ids are stringified integers probing upward;
@@ -500,16 +637,25 @@ impl Animation {
         } else {
             scene_id.to_string()
         };
-        let (preexisting_colors, preexisting_bold) =
-            if self.existing_color_handling == ExistingColorHandling::Always && uses_input_preexisting_colors {
-                (
-                    Some(ColorPair::new(self.input_fg_color.clone(), self.input_bg_color.clone())),
-                    self.input_bold,
-                )
-            } else {
-                (None, false)
-            };
-        let mut scene = Scene::new(&scene_id, is_looping, sync, ease, self.no_color, self.use_xterm_colors);
+        let (preexisting_colors, preexisting_bold) = if self.existing_color_handling
+            == ExistingColorHandling::Always
+            && uses_input_preexisting_colors
+        {
+            (
+                Some(ColorPair::new(self.input_fg_color, self.input_bg_color)),
+                self.input_bold,
+            )
+        } else {
+            (None, false)
+        };
+        let mut scene = Scene::new(
+            &scene_id,
+            is_looping,
+            sync,
+            ease,
+            self.no_color,
+            self.use_xterm_colors,
+        );
         scene.preexisting_colors = preexisting_colors;
         scene.preexisting_bold = preexisting_bold;
         self.scenes.insert(scene_id.clone(), scene);
@@ -538,22 +684,53 @@ impl Animation {
         let symbol = symbol.unwrap_or(input_symbol);
         let mut colors = colors.unwrap_or_default();
         let mut bold = false;
-        if self.existing_color_handling == ExistingColorHandling::Always && uses_input_preexisting_colors {
-            colors = ColorPair::new(self.input_fg_color.clone(), self.input_bg_color.clone());
+        if self.existing_color_handling == ExistingColorHandling::Always
+            && uses_input_preexisting_colors
+        {
+            colors = ColorPair::new(self.input_fg_color, self.input_bg_color);
             bold = self.input_bold;
         }
-        let fg_code = self.get_color_code(colors.fg_color.as_ref());
-        let bg_code = self.get_color_code(colors.bg_color.as_ref());
-        self.current_character_visual = Rc::new(CharacterVisual::new(
-            symbol,
-            VisualParams {
-                bold,
-                colors: Some(colors),
-                fg_color_code: fg_code,
-                bg_color_code: bg_code,
-                ..Default::default()
-            },
-        ));
+        let flags = (self.no_color as u8) | (self.use_xterm_colors as u8) << 1 | (bold as u8) << 2;
+        let slot = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = crate::utils::hash::FxHasher::default();
+            symbol.hash(&mut hasher);
+            colors.hash(&mut hasher);
+            hasher.write_u8(flags);
+            (hasher.finish() >> 52) as usize
+        };
+        self.current_character_visual = APPEARANCE_MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if let Some((entry_colors, entry_flags, visual)) = &memo[slot] {
+                if *entry_flags == flags && *entry_colors == colors && visual.symbol == symbol {
+                    return *visual;
+                }
+            }
+            let fg_code = resolve_color_code(
+                colors.fg_color.as_ref(),
+                self.no_color,
+                self.use_xterm_colors,
+                None,
+            );
+            let bg_code = resolve_color_code(
+                colors.bg_color.as_ref(),
+                self.no_color,
+                self.use_xterm_colors,
+                None,
+            );
+            let visual = CharacterVisual::interned(
+                symbol.to_owned(),
+                VisualParams {
+                    bold,
+                    colors: Some(colors),
+                    fg_color_code: fg_code,
+                    bg_color_code: bg_code,
+                    ..Default::default()
+                },
+            );
+            memo[slot] = Some((colors, flags, visual));
+            visual
+        });
     }
 
     /// Animation.adjust_color_brightness: hand-rolled RGB->HSL->RGB with
@@ -575,7 +752,8 @@ impl Animation {
                 return color_intensity;
             }
             if hue_value < 2.0 / 3.0 {
-                return lightness_scaled + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
+                return lightness_scaled
+                    + (color_intensity - lightness_scaled) * (2.0 / 3.0 - hue_value) * 6.0;
             }
             lightness_scaled
         }
@@ -600,7 +778,12 @@ impl Animation {
                 diff / (max_val + min_val)
             };
             let mut hue_value = if max_val == normalized_red {
-                (normalized_green - normalized_blue) / diff + if normalized_green < normalized_blue { 6.0 } else { 0.0 }
+                (normalized_green - normalized_blue) / diff
+                    + if normalized_green < normalized_blue {
+                        6.0
+                    } else {
+                        0.0
+                    }
             } else if max_val == normalized_green {
                 (normalized_blue - normalized_red) / diff + 2.0
             } else {
@@ -610,7 +793,11 @@ impl Animation {
             (hue_value, saturation)
         };
 
-        lightness = (lightness * brightness).min(1.0).max(0.0);
+        // not clamp(): NaN must come out as 1.0, as it does here
+        #[allow(clippy::manual_clamp)]
+        {
+            lightness = (lightness * brightness).min(1.0).max(0.0);
+        }
 
         let (red, green, blue) = if saturation == 0.0 {
             (lightness, lightness, lightness)
@@ -628,12 +815,10 @@ impl Animation {
             )
         };
 
-        let adjusted = format!(
-            "{:02x}{:02x}{:02x}",
-            round_half_even(red * 255.0),
-            round_half_even(green * 255.0),
-            round_half_even(blue * 255.0)
-        );
-        Color::from_hex(&adjusted).unwrap()
+        Color::from_rgb(
+            round_half_even(red * 255.0) as u8,
+            round_half_even(green * 255.0) as u8,
+            round_half_even(blue * 255.0) as u8,
+        )
     }
 }

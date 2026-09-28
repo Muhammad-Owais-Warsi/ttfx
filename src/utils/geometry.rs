@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use crate::utils::pycompat::round_half_even;
 
 /// 1-based canvas coordinate: column grows right, row grows UP (origin bottom-left).
+/// `repr(C)`: the fx motion batch loads a run of them as (column, row) pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(C)]
 pub struct Coord {
     pub column: i64,
     pub row: i64,
@@ -42,7 +44,12 @@ impl FloatPoint {
 
 /// find_coords_on_circle: coords_limit 0 -> round(2*pi*r); x offset from the
 /// origin is doubled for cell aspect; every point rounded (banker's).
-pub fn find_coords_on_circle(origin: Coord, radius: i64, coords_limit: i64, unique: bool) -> Vec<Coord> {
+pub fn find_coords_on_circle(
+    origin: Coord,
+    radius: i64,
+    coords_limit: i64,
+    unique: bool,
+) -> Vec<Coord> {
     let mut points: Vec<Coord> = Vec::new();
     if radius == 0 {
         return points;
@@ -94,7 +101,13 @@ pub fn find_coords_in_circle(center: Coord, diameter: i64) -> Vec<Coord> {
 }
 
 #[inline]
-fn circle_column_y_range(x: i64, h: i64, k: i64, a_squared: f64, b_squared: f64) -> std::ops::RangeInclusive<i64> {
+fn circle_column_y_range(
+    x: i64,
+    h: i64,
+    k: i64,
+    a_squared: f64,
+    b_squared: f64,
+) -> std::ops::RangeInclusive<i64> {
     let x_component = ((x - h) as f64).powf(2.0) / a_squared;
     let max_y_offset = (b_squared * (1.0 - x_component)).powf(0.5) as i64;
     (k - max_y_offset)..=(k + max_y_offset)
@@ -165,21 +178,35 @@ pub fn find_coord_on_bezier_curve(start: Coord, control: &[Coord], end: Coord, t
         return find_coord_on_line(start, end, t);
     }
 
-    let start = FloatPoint { column: start.column as f64, row: start.row as f64 };
-    let end = FloatPoint { column: end.column as f64, row: end.row as f64 };
+    let start = FloatPoint {
+        column: start.column as f64,
+        row: start.row as f64,
+    };
+    let end = FloatPoint {
+        column: end.column as f64,
+        row: end.row as f64,
+    };
 
     // Every production path is quadratic. Keep that per-frame hot path on the
     // stack instead of allocating a Vec at each De Casteljau level.
     if let [control] = control {
-        let control = FloatPoint { column: control.column as f64, row: control.row as f64 };
-        let point = start.interpolate(control, t).interpolate(control.interpolate(end, t), t);
+        let control = FloatPoint {
+            column: control.column as f64,
+            row: control.row as f64,
+        };
+        let point = start
+            .interpolate(control, t)
+            .interpolate(control.interpolate(end, t), t);
         return Coord::new(round_half_even(point.column), round_half_even(point.row));
     }
 
     let mut points: Vec<FloatPoint> = Vec::with_capacity(control.len() + 2);
     points.push(start);
     for c in control {
-        points.push(FloatPoint { column: c.column as f64, row: c.row as f64 });
+        points.push(FloatPoint {
+            column: c.column as f64,
+            row: c.row as f64,
+        });
     }
     points.push(end);
     let mut remaining = points.len();
@@ -189,7 +216,10 @@ pub fn find_coord_on_bezier_curve(start: Coord, control: &[Coord], end: Coord, t
         }
         remaining -= 1;
     }
-    Coord::new(round_half_even(points[0].column), round_half_even(points[0].row))
+    Coord::new(
+        round_half_even(points[0].column),
+        round_half_even(points[0].row),
+    )
 }
 
 /// find_coord_on_line: lerp + round.
@@ -249,6 +279,7 @@ pub fn find_normalized_distance_from_center(
     }
 
     let max_distance = ((right as f64).powf(2.0) + ((top * 2) as f64).powf(2.0)).powf(0.5);
-    let distance = ((col as f64 - center_x).powf(2.0) + ((row as f64 - center_y) * 2.0).powf(2.0)).powf(0.5);
+    let distance =
+        ((col as f64 - center_x).powf(2.0) + ((row as f64 - center_y) * 2.0).powf(2.0)).powf(0.5);
     Ok(distance / (max_distance / 2.0))
 }

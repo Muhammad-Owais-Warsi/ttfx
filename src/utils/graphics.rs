@@ -11,10 +11,37 @@ use crate::utils::rng::Rng;
 /// The original constructor argument, preserved because upstream `Color.__eq__`
 /// and `__hash__` compare `color_arg` — `Color(255) != Color("ffffff")` even
 /// when they resolve to the same RGB. Dict/set keying depends on this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorArg {
     Xterm(u8),
     Hex(RgbString), // stored stripped of '#', case preserved (upstream strips '#' only)
+}
+
+impl ColorArg {
+    /// The argument as one word, equal exactly when the arguments are: an
+    /// xterm code with the top bit set, or the hex string's zero-padded bytes
+    /// and its length.
+    #[inline]
+    pub fn key(&self) -> u64 {
+        match self {
+            ColorArg::Xterm(code) => 1 << 63 | *code as u64,
+            ColorArg::Hex(rgb) => {
+                let mut word = [0; 8];
+                word[..7].copy_from_slice(&rgb.bytes);
+                word[7] = rgb.len;
+                u64::from_le_bytes(word)
+            }
+        }
+    }
+}
+
+/// One word per argument (see `key`); visual interning hashes colors on every
+/// frame an effect builds.
+impl std::hash::Hash for ColorArg {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.key());
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,8 +65,11 @@ impl RgbString {
 impl Deref for RgbString {
     type Target = str;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
-        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap()
+        // SAFETY: the bytes are a prefix copied whole from a &str (new) or
+        // ASCII hex digits (from_rgb), so they are valid UTF-8.
+        unsafe { std::str::from_utf8_unchecked(self.bytes.get_unchecked(..self.len as usize)) }
     }
 }
 
@@ -106,15 +136,30 @@ impl std::hash::Hash for Color {
 }
 
 impl Color {
+    /// `from_rgb(rgb >> 16, rgb >> 8, rgb).color_arg.key()` without making
+    /// the color: the six lowercase hex digits worked out in one word, a
+    /// nibble per byte, and the length 6 in the top byte.
+    #[inline]
+    pub(crate) fn hex_key(rgb: u32) -> u64 {
+        let v = rgb as u64 & 0xff_ffff;
+        let mut nibbles = 0;
+        for i in 0..6 {
+            nibbles |= (v >> (20 - 4 * i) & 15) << (8 * i);
+        }
+        let letters = (nibbles + 0x0606_0606_0606) >> 4 & 0x0101_0101_0101;
+        (nibbles + 0x3030_3030_3030 + letters * 0x27) | 6 << 56
+    }
+
     /// Construct a generated color without formatting and reparsing its channels.
     /// The lowercase hex argument is observable in color equality and hashing.
     pub(crate) fn from_rgb(red: u8, green: u8, blue: u8) -> Self {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut bytes = [0; 7];
-        for (index, channel) in [red, green, blue].into_iter().enumerate() {
-            bytes[index * 2] = HEX[(channel >> 4) as usize];
-            bytes[index * 2 + 1] = HEX[(channel & 15) as usize];
-        }
+        // the digits built in one word (stored a byte at a time, they stalled
+        // the key's word load that follows)
+        let digits =
+            Self::hex_key((red as u32) << 16 | (green as u32) << 8 | blue as u32).to_le_bytes();
+        let bytes = [
+            digits[0], digits[1], digits[2], digits[3], digits[4], digits[5], 0,
+        ];
         let rgb_color = RgbString { bytes, len: 6 };
         Color {
             color_arg: ColorArg::Hex(rgb_color),
@@ -157,6 +202,34 @@ impl Color {
         (self.rgb[0], self.rgb[1], self.rgb[2])
     }
 
+    /// The color whose `color_arg.key()` is `key`: every field follows from
+    /// the argument, as from_xterm and from_hex make it.
+    ///
+    /// # Safety
+    ///
+    /// `key` must be the `color_arg.key()` of a Color: either an xterm key
+    /// (top bit set), or a hex key whose low seven bytes start with `len`
+    /// (the top byte, at most 7) bytes of valid UTF-8. `RgbString`'s deref
+    /// trusts both without checking.
+    pub(crate) unsafe fn from_key(key: u64) -> Self {
+        if key >> 63 != 0 {
+            return Color::from_xterm(key as u8);
+        }
+        let b = key.to_le_bytes();
+        debug_assert!(b[7] <= 7, "from_key: hex length {} > 7", b[7]);
+        debug_assert!(std::str::from_utf8(&b[..(b[7] as usize).min(7)]).is_ok());
+        let rgb_color = RgbString {
+            bytes: [b[0], b[1], b[2], b[3], b[4], b[5], b[6]],
+            len: b[7],
+        };
+        Color {
+            color_arg: ColorArg::Hex(rgb_color),
+            xterm_color: None,
+            rgb: Self::parse_rgb(&rgb_color),
+            rgb_color,
+        }
+    }
+
     fn parse_rgb(s: &str) -> [u8; 3] {
         [
             u8::from_str_radix(&s[0..2], 16).unwrap(),
@@ -166,7 +239,7 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColorPair {
     pub fg_color: Option<Color>,
     pub bg_color: Option<Color>,
@@ -174,7 +247,10 @@ pub struct ColorPair {
 
 impl ColorPair {
     pub fn new(fg: Option<Color>, bg: Option<Color>) -> Self {
-        ColorPair { fg_color: fg, bg_color: bg }
+        ColorPair {
+            fg_color: fg,
+            bg_color: bg,
+        }
     }
 }
 
@@ -202,10 +278,19 @@ pub struct CoordColorMap {
 }
 
 impl CoordColorMap {
-    fn new(min_row: i64, max_row: i64, min_column: i64, max_column: i64, column_major: bool) -> Self {
-        let width = usize::try_from(max_column - min_column + 1).expect("gradient canvas is too large");
+    fn new(
+        min_row: i64,
+        max_row: i64,
+        min_column: i64,
+        max_column: i64,
+        column_major: bool,
+    ) -> Self {
+        let width =
+            usize::try_from(max_column - min_column + 1).expect("gradient canvas is too large");
         let height = usize::try_from(max_row - min_row + 1).expect("gradient canvas is too large");
-        let len = width.checked_mul(height).expect("gradient canvas is too large");
+        let len = width
+            .checked_mul(height)
+            .expect("gradient canvas is too large");
         Self {
             order: Vec::with_capacity(len),
             colors: Vec::with_capacity(len),
@@ -229,12 +314,18 @@ impl CoordColorMap {
         if column >= self.width || row >= self.height {
             return None;
         }
-        let index = if self.column_major { column * self.height + row } else { row * self.width + column };
+        let index = if self.column_major {
+            column * self.height + row
+        } else {
+            row * self.width + column
+        };
         self.colors.get(index)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Coord, &Color)> {
-        self.order.iter().map(move |c| (*c, self.get(c).expect("coordinate missing from gradient")))
+        self.order
+            .iter()
+            .map(move |c| (*c, self.get(c).expect("coordinate missing from gradient")))
     }
 }
 
@@ -249,7 +340,12 @@ pub struct Gradient {
 impl Gradient {
     /// Gradient(*stops, steps=...). `steps_was_int` mirrors the upstream quirk
     /// that only scalar (int) steps are validated before generation.
-    pub fn new(stops: &[Color], steps: &[i64], steps_was_int: bool, do_loop: bool) -> Result<Self, String> {
+    pub fn new(
+        stops: &[Color],
+        steps: &[i64],
+        steps_was_int: bool,
+        do_loop: bool,
+    ) -> Result<Self, String> {
         if stops.is_empty() {
             return Err("At least one stop must be provided.".to_string());
         }
@@ -263,13 +359,13 @@ impl Gradient {
         let mut spectrum: Vec<Color> = Vec::new();
         if stops.len() == 1 {
             for _ in 0..steps[0] {
-                spectrum.push(stops[0].clone());
+                spectrum.push(stops[0]);
             }
             return Ok(Gradient { spectrum });
         }
         let mut stops: Vec<Color> = stops.to_vec();
         if do_loop {
-            stops.push(stops[0].clone());
+            stops.push(stops[0]);
         }
         let pair_count = stops.len() - 1;
         let mut steps: Vec<i64> = steps[..steps.len().min(pair_count)].to_vec();
@@ -278,7 +374,9 @@ impl Gradient {
         }
         for (pair_index, step_count) in steps.iter().copied().enumerate() {
             if step_count < 1 {
-                return Err(format!("Invalid steps: {step_count} | Steps must be greater than 0."));
+                return Err(format!(
+                    "Invalid steps: {step_count} | Steps must be greater than 0."
+                ));
             }
             let start = &stops[pair_index];
             let end = &stops[pair_index + 1];
@@ -295,7 +393,7 @@ impl Gradient {
                 let blue = (sb + blue_delta * i).clamp(0, 255);
                 spectrum.push(Color::from_rgb(red as u8, green as u8, blue as u8));
             }
-            spectrum.push(end.clone());
+            spectrum.push(*end);
         }
         Ok(Gradient { spectrum })
     }
@@ -340,7 +438,10 @@ impl Gradient {
             return Err("max_row and max_column must be greater than 0.".to_string());
         }
         if min_row > max_row || min_column > max_column {
-            return Err("min_row and min_column must be less than or equal to max_row and max_column.".to_string());
+            return Err(
+                "min_row and min_column must be less than or equal to max_row and max_column."
+                    .to_string(),
+            );
         }
         let row_offset = min_row - 1;
         let column_offset = min_column - 1;
@@ -355,18 +456,19 @@ impl Gradient {
             GradientDirection::Vertical => {
                 for row in min_row..=max_row {
                     let fraction = (row - row_offset) as f64 / (max_row - row_offset) as f64;
-                    let color = self.get_color_at_fraction(fraction)?.clone();
+                    let color = *self.get_color_at_fraction(fraction)?;
                     for column in min_column..=max_column {
-                        mapping.push(Coord::new(column, row), color.clone());
+                        mapping.push(Coord::new(column, row), color);
                     }
                 }
             }
             GradientDirection::Horizontal => {
                 for column in min_column..=max_column {
-                    let fraction = (column - column_offset) as f64 / (max_column - column_offset) as f64;
-                    let color = self.get_color_at_fraction(fraction)?.clone();
+                    let fraction =
+                        (column - column_offset) as f64 / (max_column - column_offset) as f64;
+                    let color = *self.get_color_at_fraction(fraction)?;
                     for row in min_row..=max_row {
-                        mapping.push(Coord::new(column, row), color.clone());
+                        mapping.push(Coord::new(column, row), color);
                     }
                 }
             }
@@ -380,7 +482,7 @@ impl Gradient {
                             max_column,
                             Coord::new(column, row),
                         )?;
-                        let color = self.get_color_at_fraction(distance)?.clone();
+                        let color = *self.get_color_at_fraction(distance)?;
                         mapping.push(Coord::new(column, row), color);
                     }
                 }
@@ -390,7 +492,7 @@ impl Gradient {
                     for column in min_column..=max_column {
                         let fraction = (((row - row_offset) * 2) + (column - column_offset)) as f64
                             / (((max_row - row_offset) * 2) + (max_column - column_offset)) as f64;
-                        let color = self.get_color_at_fraction(fraction)?.clone();
+                        let color = *self.get_color_at_fraction(fraction)?;
                         mapping.push(Coord::new(column, row), color);
                     }
                 }
@@ -409,7 +511,11 @@ pub fn random_color(rng: &mut Rng) -> Color {
 /// graphics.shift_color_towards: float lerp with int() TRUNCATION back to hex
 /// (unlike adjust_color_brightness's round()). Negative components format
 /// Python-style ("-3" not two's complement) so error conditions match.
-pub fn shift_color_towards(color: &Color, target_color: &Color, factor: f64) -> Result<Color, String> {
+pub fn shift_color_towards(
+    color: &Color,
+    target_color: &Color,
+    factor: f64,
+) -> Result<Color, String> {
     let interpolate = |start: f64, end: f64, factor: f64| start + (end - start) * factor;
     let norm = |c: &Color| {
         let (r, g, b) = c.rgb_ints();
@@ -423,7 +529,11 @@ pub fn shift_color_towards(color: &Color, target_color: &Color, factor: f64) -> 
         (interpolate(cb, tb, factor) * 255.0) as i64,
     ];
     if channels.iter().all(|channel| (0..=255).contains(channel)) {
-        return Ok(Color::from_rgb(channels[0] as u8, channels[1] as u8, channels[2] as u8));
+        return Ok(Color::from_rgb(
+            channels[0] as u8,
+            channels[1] as u8,
+            channels[2] as u8,
+        ));
     }
     let py_hex = |v: f64| {
         let i = (v * 255.0) as i64; // int() truncation
@@ -463,7 +573,10 @@ mod tests {
             }
         }
         assert_ne!(Color::from_rgb(255, 255, 255), Color::from_xterm(15));
-        assert_ne!(Color::from_rgb(255, 255, 255), Color::from_hex("FFFFFF").unwrap());
+        assert_ne!(
+            Color::from_rgb(255, 255, 255),
+            Color::from_hex("FFFFFF").unwrap()
+        );
     }
 
     #[test]
@@ -473,7 +586,10 @@ mod tests {
         let red = Color::from_hex("ff0000").unwrap();
         // Upstream accepts seven hex digits and parses the first six. Preserve
         // that quirk when extrapolation carries a channel beyond one byte.
-        assert_eq!(shift_color_towards(&black, &red, 2.0).unwrap(), Color::from_hex("1fe0000").unwrap());
+        assert_eq!(
+            shift_color_towards(&black, &red, 2.0).unwrap(),
+            Color::from_hex("1fe0000").unwrap()
+        );
         // Preserve the Rust constructor's existing panic when a leading minus
         // passes string validation but fails unsigned channel parsing.
         assert!(std::panic::catch_unwind(|| shift_color_towards(&red, &black, 2.0)).is_err());
@@ -484,15 +600,23 @@ mod tests {
     fn fraction_lookup_preserves_division_boundaries() {
         use super::Gradient;
         for len in [1, 2, 3, 5, 7, 12, 25, 64, 127, 256, 257, 1024] {
-            let gradient = Gradient { spectrum: (0..len).map(|i| Color::from_xterm(i as u8)).collect() };
+            let gradient = Gradient {
+                spectrum: (0..len).map(|i| Color::from_xterm(i as u8)).collect(),
+            };
             let check = |fraction| {
                 if !(0.0..=1.0).contains(&fraction) {
                     assert!(gradient.get_color_at_fraction(fraction).is_err());
                     return;
                 }
-                let expected = (1..=len).find(|&i| fraction <= i as f64 / len as f64).unwrap() - 1;
+                let expected = (1..=len)
+                    .find(|&i| fraction <= i as f64 / len as f64)
+                    .unwrap()
+                    - 1;
                 assert!(
-                    std::ptr::eq(gradient.get_color_at_fraction(fraction).unwrap(), &gradient.spectrum[expected]),
+                    std::ptr::eq(
+                        gradient.get_color_at_fraction(fraction).unwrap(),
+                        &gradient.spectrum[expected]
+                    ),
                     "len={len}, fraction={fraction:?}, expected={expected}"
                 );
             };
@@ -515,15 +639,21 @@ mod tests {
     fn coordinate_mapping_keeps_bounds_and_public_iteration_order() {
         use super::{CoordColorMap, Gradient, GradientDirection};
         use crate::utils::geometry::Coord;
-        let gradient = Gradient::with_steps(&[Color::from_xterm(1), Color::from_xterm(15)], 7, false).unwrap();
+        let gradient =
+            Gradient::with_steps(&[Color::from_xterm(1), Color::from_xterm(15)], 7, false).unwrap();
         for direction in [
             GradientDirection::Vertical,
             GradientDirection::Horizontal,
             GradientDirection::Diagonal,
             GradientDirection::Radial,
         ] {
-            let mut mapping = gradient.build_coordinate_color_mapping(3, 7, 4, 9, direction).unwrap();
-            let original: Vec<_> = mapping.iter().map(|(coord, color)| (coord, *color)).collect();
+            let mut mapping = gradient
+                .build_coordinate_color_mapping(3, 7, 4, 9, direction)
+                .unwrap();
+            let original: Vec<_> = mapping
+                .iter()
+                .map(|(coord, color)| (coord, *color))
+                .collect();
             assert_eq!(original.len(), 30);
             for &(coord, color) in &original {
                 assert_eq!(mapping.get(&coord), Some(&color));
@@ -544,7 +674,13 @@ mod tests {
             let mut expected = original;
             expected.reverse();
             expected.push(*expected.last().unwrap());
-            assert_eq!(mapping.iter().map(|(coord, color)| (coord, *color)).collect::<Vec<_>>(), expected);
+            assert_eq!(
+                mapping
+                    .iter()
+                    .map(|(coord, color)| (coord, *color))
+                    .collect::<Vec<_>>(),
+                expected
+            );
         }
         assert_eq!(CoordColorMap::default().get(&Coord::new(0, 0)), None);
     }
@@ -564,5 +700,19 @@ mod tests {
             format!("{color:?}"),
             "Color { color_arg: Hex(\"12AbEf7\"), xterm_color: None, rgb_color: \"12AbEf7\" }"
         );
+    }
+
+    #[test]
+    fn from_rgb_is_lowercase_hex() {
+        for v in (0..1u32 << 24)
+            .step_by(4099)
+            .chain([0, 0xffffff, 0x0a0b0c, 0x9fa0af])
+        {
+            let (r, g, b) = ((v >> 16) as u8, (v >> 8) as u8, v as u8);
+            let c = Color::from_rgb(r, g, b);
+            assert_eq!(&*c.rgb_color, format!("{r:02x}{g:02x}{b:02x}"));
+            assert_eq!(c.rgb_ints(), (r, g, b));
+            assert_eq!(c.color_arg.key(), Color::hex_key(v));
+        }
     }
 }

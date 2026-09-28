@@ -4,7 +4,36 @@
 
 /// Python's built-in `round()`: banker's rounding (half-to-even), returning i64.
 /// Rust's `f64::round` is half-away-from-zero, which differs at exact .5 values.
+#[inline]
 pub fn round_half_even(x: f64) -> i64 {
+    // cvtsd2si rounds with MXCSR's default nearest-even mode (Rust never
+    // changes it), which is round_ties_even + the cast for every value it
+    // can represent; it returns i64::MIN on overflow and NaN, and that
+    // (rare) result takes the full routine below. Baseline x86_64 has no
+    // roundsd, so round_ties_even would be a libm call.
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is baseline on x86_64.
+        let r = unsafe { std::arch::x86_64::_mm_cvtsd_si64(std::arch::x86_64::_mm_set_sd(x)) };
+        if r != i64::MIN {
+            return r;
+        }
+    }
+    // frintn + fcvtzs (baseline on aarch64) are round_ties_even + the
+    // saturating cast, which the routine below is for every value but +inf
+    // (it wraps that to i64::MIN): i64::MAX takes the routine.
+    #[cfg(target_arch = "aarch64")]
+    {
+        let r = x.round_ties_even() as i64;
+        if r != i64::MAX {
+            return r;
+        }
+    }
+    round_half_even_slow(x)
+}
+
+#[cold]
+fn round_half_even_slow(x: f64) -> i64 {
     if x.is_finite() {
         return x.round_ties_even() as i64;
     }
@@ -92,7 +121,9 @@ mod tests {
         }
         let mut bits = 0x1234_5678_9abc_def0_u64;
         for _ in 0..1_000_000 {
-            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            bits = bits
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let value = f64::from_bits(bits);
             if value.is_finite() {
                 assert_eq!(round_half_even(value), previous(value), "{value}");

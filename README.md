@@ -25,29 +25,64 @@ TTE is MIT licensed and so is this port; the original copyright is preserved in
 
 TTE is a Python package. That's the right call for a library, but for a shell toy that lives in
 your prompt pipeline it means an interpreter, an install step, and ~65 ms of import before the
-first frame. ttfx is one dependency-free binary that starts in half a millisecond.
+first frame. ttfx is one dependency-free binary that starts in under a millisecond.
 
-That difference is the whole reason this exists. On a fullscreen canvas the heavier effects run
-out of headroom under Python. Time to render a whole animation, pacing disabled so this measures
-throughput rather than `sleep()`:
+That difference is the whole reason this exists, and it compounds: once running, ttfx renders
+every effect hundreds of times faster than Python TTE. Time to render each whole animation at
+200×50 cells (46 lines of 190 characters), pacing disabled so this measures throughput rather
+than `sleep()`:
 
-| At 200×50 cells | frames | ttfx | Python TTE | ttfx fps |
-|---|---|---|---|---|
-| slide | 375 | 76 ms | 2,203 ms | 4,930 |
-| beams | 732 | 181 ms | 5,564 ms | 4,050 |
-| rings | 1,566 | 521 ms | 10,439 ms | 3,004 |
-| waves | 633 | 374 ms | 8,745 ms | 1,693 |
-| startup | — | 0.5 ms | 64 ms | — |
+| Effect | Frames | Python TTE | ttfx | Faster |
+|---|---:|---:|---:|---:|
+| beams | 754 | 7,193 ms | 8.2 ms | **876×** |
+| binarypath | 2,003 | 19,489 ms | 57.3 ms | **340×** |
+| blackhole | 1,814 | 11,714 ms | 39.8 ms | **294×** |
+| bouncyballs | 9,169 | 8,665 ms | 19.7 ms | **439×** |
+| bubbles | 12,207 | 12,991 ms | 25.6 ms | **506×** |
+| burn | 3,178 | 8,276 ms | 11.1 ms | **746×** |
+| colorshift | 528 | 6,614 ms | 13.7 ms | **482×** |
+| crumble | 1,958 | 8,343 ms | 34.3 ms | **243×** |
+| decrypt | 5,506 | 10,134 ms | 11.7 ms | **868×** |
+| errorcorrect | 5,252 | 7,232 ms | 11.5 ms | **626×** |
+| expand | 314 | 3,651 ms | 11.9 ms | **306×** |
+| fireworks | 1,503 | 16,502 ms | 42.4 ms | **389×** |
+| highlight | 129 | 1,418 ms | 2.5 ms | **559×** |
+| laseretch | 14,490 | 18,051 ms | 26.4 ms | **683×** |
+| matrix ¹ | 2,315 | — | — | — |
+| middleout | 245 | 2,549 ms | 7.1 ms | **360×** |
+| orbittingvolley | 1,169 | 1,967 ms | 10.6 ms | **186×** |
+| overflow | 313 | 2,723 ms | 9.9 ms | **276×** |
+| pour | 7,252 | 6,783 ms | 12.0 ms | **567×** |
+| print | 10,065 | 8,020 ms | 5.8 ms | **1,387×** |
+| rain | 4,853 | 5,166 ms | 13.4 ms | **384×** |
+| randomsequence | 207 | 1,223 ms | 2.8 ms | **443×** |
+| rings | 1,580 | 13,003 ms | 73.8 ms | **176×** |
+| scattered | 438 | 4,055 ms | 15.1 ms | **269×** |
+| slice | 400 | 2,703 ms | 5.8 ms | **464×** |
+| slide | 375 | 2,643 ms | 8.3 ms | **317×** |
+| smoke | 645 | 4,016 ms | 5.8 ms | **694×** |
+| spotlights | 832 | 9,848 ms | 27.7 ms | **355×** |
+| spray | 718 | 3,364 ms | 19.4 ms | **174×** |
+| swarm | 5,242 | 16,675 ms | 69.8 ms | **239×** |
+| sweep | 220 | 1,663 ms | 3.3 ms | **508×** |
+| synthgrid | 687 | 2,602 ms | 5.2 ms | **497×** |
+| thunderstorm ¹ | 1,083 | — | — | — |
+| unstable | 552 | 5,014 ms | 22.4 ms | **223×** |
+| vhstape | 727 | 6,872 ms | 17.8 ms | **387×** |
+| waves | 635 | 10,656 ms | 11.7 ms | **914×** |
+| wipe | 138 | 1,346 ms | 2.4 ms | **552×** |
 
-Across the 35 effects that aren't gated on wall-clock time, the median speedup is **27.5×**
-(range 17.1×–47.4×). The two that are gated — `matrix` and `thunderstorm` — spend most of their
-runtime in a fixed animation duration that no implementation can shorten, so they come in at
-1.9× and 1.3×; what ttfx buys there is a far higher frame rate inside that window, not a shorter
-one.
+**ttfx is 423× faster than Python TTE** (geometric mean over the 35 effects that run to
+completion; median 439×, range 174×–1,387×). Starting up to draw a single character takes 0.8 ms
+against 66 ms.
 
-Reproduce it with `python3 tools/tests/bench_full.py`, or set `TTFX_BENCH_COLS`, `TTFX_BENCH_LINES`
-and `TTFX_BENCH_FILL=1` for the fullscreen numbers above. Both sides run their real user-facing
-command, best of five.
+¹ `matrix` and `thunderstorm` run for a fixed wall-clock duration, so Python and ttfx finish at the
+same moment; what ttfx buys there is a far higher frame rate inside that window.
+
+Measured on an AMD Ryzen 9 9955HX with ttfx 0.5.0 against TerminalTextEffects 0.15.0 on CPython
+3.14.7, both pinned to two cores, output to `/dev/null`: ttfx best of five runs, Python best of
+two. Reproduce it with `tools/fx/speed.py --python` (see `tools/fx/speed.py --help` for installing
+Python TTE).
 
 For energy rather than speed, `python3 tools/tests/bench_energy.py [effect ...]` reports the
 joules one paced run costs, read from the CPU's RAPL counters (Linux, needs root to read them).

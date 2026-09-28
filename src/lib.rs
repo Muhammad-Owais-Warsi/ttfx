@@ -1,7 +1,7 @@
-pub mod asm;
 pub mod cli;
 pub mod effects;
 pub mod engine;
+pub mod fx;
 pub mod utils;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +116,27 @@ pub fn take_terminal_resize() -> bool {
 pub fn restore_sigpipe() {
     unsafe {
         libc_signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+/// Grow glibc's heap in large steps. The engines' tables (the frame region
+/// alone is megabytes) otherwise come from a heap that grows 128 KiB at a
+/// time, where transparent huge pages can never apply, and every 4 KiB page
+/// costs a fault on first touch: 3,000 faults on a 200x50 decrypt, ~10% of
+/// the run. Pages that are never touched are never backed, so this only
+/// raises the address space reserved.
+pub fn tune_allocator() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn mallopt(param: i32, value: i32) -> i32;
+        }
+        const M_TOP_PAD: i32 = -2;
+        // SAFETY: mallopt only adjusts allocator parameters; called before
+        // any threads exist.
+        unsafe {
+            mallopt(M_TOP_PAD, 32 << 20);
+        }
     }
 }
 

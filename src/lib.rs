@@ -220,13 +220,6 @@ pub fn tune_allocator() {
     }
 }
 
-const SIGINT: i32 = 2;
-const SIGTERM: i32 = 15;
-const SIGPIPE: i32 = 13;
-/// 28 on Linux and on the BSDs, macOS included.
-const SIGWINCH: i32 = 28;
-const SIG_DFL: usize = 0;
-
 /// Windows platform: no new crates, raw kernel32 via `extern "system"`.
 /// Ctrl-C and resize feed the same Atomics the Unix signals feed, so the run
 /// loop, teardown, and `resize_settled()` debounce stay shared.

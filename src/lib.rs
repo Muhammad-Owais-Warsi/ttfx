@@ -4,10 +4,14 @@ pub mod engine;
 pub mod fx;
 pub mod utils;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+#[cfg(any(unix, windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// `println!` and `eprintln!` panic when their write fails, and a release
-/// build aborts on panic — so on a terminal that has just gone away, reporting
+/// build aborts on panic â€” so on a terminal that has just gone away, reporting
 /// the loss is what dumps the core, not the loss itself:
 ///
 /// ```text
@@ -38,164 +42,116 @@ macro_rules! errln {
     }};
 }
 
+#[cfg(any(unix, windows))]
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+#[cfg(any(unix, windows))]
 static TERMINATED: AtomicBool = AtomicBool::new(false);
+#[cfg(any(unix, windows))]
 static TERMINAL_RESIZED: AtomicBool = AtomicBool::new(false);
 
+/// SIGINT is recorded and checked from the run loop so teardown (cursor
+/// restore) happens through normal control flow â€” Drop alone would not run on
+/// a raw signal exit (plan.md Â§8).
+#[cfg(unix)]
+pub fn install_sigint_handler() {
+    // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
+    unsafe {
+        libc_signal(SIGINT, handle_sigint as *const () as usize);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn handle_sigint(_: i32) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
 pub fn interrupted() -> bool {
-    INTERRUPTED.load(Ordering::SeqCst)
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        INTERRUPTED.load(Ordering::SeqCst)
+    }
+}
+
+/// SIGTERM is recorded like SIGINT so a supervisor killing an animation gets
+/// the normal teardown instead of a hidden cursor. `die_from_sigterm` then
+/// finishes the job the handler deferred.
+#[cfg(unix)]
+pub fn install_sigterm_handler() {
+    // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
+    unsafe {
+        libc_signal(SIGTERM, handle_sigterm as *const () as usize);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn handle_sigterm(_: i32) {
+    TERMINATED.store(true, Ordering::SeqCst);
 }
 
 pub fn terminated() -> bool {
-    TERMINATED.load(Ordering::SeqCst)
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        TERMINATED.load(Ordering::SeqCst)
+    }
+}
+
+/// Finish the SIGTERM we deferred: the cursor is back, so hand the signal to
+/// the default action and die from it. A supervisor then sees a terminated
+/// child, exactly as it would from the redirected run that never installs a
+/// handler at all. SIGINT does not go through here â€” upstream exits 1 on
+/// KeyboardInterrupt and parity outranks the convention (plan.md Â§8).
+#[cfg(unix)]
+pub fn die_from_sigterm() -> ! {
+    // SAFETY: restoring the default action and re-raising is the documented
+    // way to exit with a signal's status; raise(2) here does not return.
+    unsafe {
+        libc_signal(SIGTERM, SIG_DFL);
+        libc_raise(SIGTERM);
+    }
+    unreachable!("SIGTERM with the default action terminates the process");
+}
+
+/// Record terminal resizes so the CLI can rebuild effects whose canvas and
+/// character positions were derived from the previous dimensions.
+#[cfg(unix)]
+pub fn install_sigwinch_handler() {
+    // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
+    unsafe {
+        libc_signal(SIGWINCH, handle_sigwinch as *const () as usize);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn handle_sigwinch(_: i32) {
+    TERMINAL_RESIZED.store(true, Ordering::SeqCst);
 }
 
 /// Consume a pending terminal resize notification.
 pub fn take_terminal_resize() -> bool {
-    TERMINAL_RESIZED.swap(false, Ordering::SeqCst)
-}
-
-/// Test seam: raise the same flag the Unix signal and the Windows console
-/// watcher raise, without touching OS handlers.
-pub fn notify_terminal_resize() {
-    TERMINAL_RESIZED.store(true, Ordering::SeqCst);
-}
-
-/// Enable ANSI escape processing for the run, restoring the previous console
-/// mode when dropped. No-op on Unix; on Windows turns on
-/// VIRTUAL_TERMINAL_PROCESSING for stdout (best effort: a redirected handle
-/// or an old console just keeps working without colors) and puts the saved
-/// mode back so the user's shell is left as it was found.
-pub struct ConsoleModeGuard {
-    _priv: (),
-}
-
-impl ConsoleModeGuard {
-    pub fn enable() -> Self {
-        // `panic = "abort"` in release skips `Drop`, but panic hooks still
-        // run first — so the saved mode goes back even on that path. Arming
-        // the hook first leaves no window where the mode is changed and only
-        // the default hook is installed; the resize thread is already running
-        // by here, so that window is reachable rather than theoretical.
-        #[cfg(windows)]
-        windows::install_panic_hook();
-        #[cfg(windows)]
-        windows::enable_virtual_terminal();
-        ConsoleModeGuard { _priv: () }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        TERMINAL_RESIZED.swap(false, Ordering::SeqCst)
     }
 }
 
-impl Drop for ConsoleModeGuard {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        windows::restore_console_mode();
-    }
-}
-
+/// Restore default SIGPIPE so `ttfx ... | head` dies quietly like any Unix
+/// tool instead of panicking on a broken pipe (Rust ignores SIGPIPE by default).
 #[cfg(unix)]
-pub use unix::{
-    die_from_sigterm, install_sigint_handler, install_sigterm_handler, install_sigwinch_handler,
-    restore_sigpipe,
-};
-
-#[cfg(windows)]
-pub use windows::{
-    die_from_sigterm, install_sigint_handler, install_sigterm_handler, install_sigwinch_handler,
-    restore_sigpipe,
-};
-
-#[cfg(unix)]
-mod unix {
-    use super::{INTERRUPTED, TERMINATED, TERMINAL_RESIZED};
-    use std::sync::atomic::Ordering;
-
-    /// SIGINT is recorded and checked from the run loop so teardown (cursor
-    /// restore) happens through normal control flow — Drop alone would not run on
-    /// a raw signal exit (plan.md §8).
-    pub fn install_sigint_handler() {
-        // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
-        unsafe {
-            libc_signal(SIGINT, handle_sigint as *const () as usize);
-        }
-    }
-
-    extern "C" fn handle_sigint(_: i32) {
-        INTERRUPTED.store(true, Ordering::SeqCst);
-    }
-
-    /// SIGTERM is recorded like SIGINT so a supervisor killing an animation gets
-    /// the normal teardown instead of a hidden cursor. `die_from_sigterm` then
-    /// finishes the job the handler deferred.
-    pub fn install_sigterm_handler() {
-        // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
-        unsafe {
-            libc_signal(SIGTERM, handle_sigterm as *const () as usize);
-        }
-    }
-
-    extern "C" fn handle_sigterm(_: i32) {
-        TERMINATED.store(true, Ordering::SeqCst);
-    }
-
-    /// Finish the SIGTERM we deferred: the cursor is back, so hand the signal to
-    /// the default action and die from it. A supervisor then sees a terminated
-    /// child, exactly as it would from the redirected run that never installs a
-    /// handler at all. SIGINT does not go through here — upstream exits 1 on
-    /// KeyboardInterrupt and parity outranks the convention (plan.md §8).
-    pub fn die_from_sigterm() -> ! {
-        // SAFETY: restoring the default action and re-raising is the documented
-        // way to exit with a signal's status; raise(2) here does not return.
-        unsafe {
-            libc_signal(SIGTERM, SIG_DFL);
-            libc_raise(SIGTERM);
-        }
-        unreachable!("SIGTERM with the default action terminates the process");
-    }
-
-    /// Record terminal resizes so the CLI can rebuild effects whose canvas and
-    /// character positions were derived from the previous dimensions.
-    pub fn install_sigwinch_handler() {
-        // SAFETY: signal(2) with a signal-safe handler that only stores a flag.
-        unsafe {
-            libc_signal(SIGWINCH, handle_sigwinch as *const () as usize);
-        }
-    }
-
-    extern "C" fn handle_sigwinch(_: i32) {
-        TERMINAL_RESIZED.store(true, Ordering::SeqCst);
-    }
-
-    /// Restore default SIGPIPE so `ttfx ... | head` dies quietly like any Unix
-    /// tool instead of panicking on a broken pipe (Rust ignores SIGPIPE by default).
-    pub fn restore_sigpipe() {
-        unsafe {
-            libc_signal(SIGPIPE, SIG_DFL);
-        }
-    }
-
-    const SIGINT: i32 = 2;
-    const SIGTERM: i32 = 15;
-    const SIGPIPE: i32 = 13;
-    /// 28 on Linux and on the BSDs, macOS included.
-    const SIGWINCH: i32 = 28;
-    const SIG_DFL: usize = 0;
-
-    unsafe fn libc_signal(signum: i32, handler: usize) {
-        unsafe extern "C" {
-            fn signal(signum: i32, handler: usize) -> usize;
-        }
-        unsafe {
-            signal(signum, handler);
-        }
-    }
-
-    unsafe fn libc_raise(signum: i32) {
-        unsafe extern "C" {
-            fn raise(signum: i32) -> i32;
-        }
-        unsafe {
-            raise(signum);
-        }
+pub fn restore_sigpipe() {
+    unsafe {
+        libc_signal(SIGPIPE, SIG_DFL);
     }
 }
 
@@ -219,6 +175,100 @@ pub fn tune_allocator() {
         }
     }
 }
+
+#[cfg(unix)]
+const SIGINT: i32 = 2;
+#[cfg(unix)]
+const SIGTERM: i32 = 15;
+#[cfg(unix)]
+const SIGPIPE: i32 = 13;
+/// 28 on Linux and on the BSDs, macOS included.
+#[cfg(unix)]
+const SIGWINCH: i32 = 28;
+#[cfg(unix)]
+const SIG_DFL: usize = 0;
+
+#[cfg(unix)]
+unsafe fn libc_signal(signum: i32, handler: usize) {
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    unsafe {
+        signal(signum, handler);
+    }
+}
+
+#[cfg(unix)]
+unsafe fn libc_raise(signum: i32) {
+    unsafe extern "C" {
+        fn raise(signum: i32) -> i32;
+    }
+    unsafe {
+        raise(signum);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_resize_notifications_are_consumed() {
+        take_terminal_resize();
+        raise_resize();
+        assert!(take_terminal_resize());
+        assert!(!take_terminal_resize());
+    }
+
+    #[cfg(unix)]
+    fn raise_resize() {
+        handle_sigwinch(SIGWINCH);
+    }
+
+    /// Same flag the poll thread sets; no OS handlers involved.
+    #[cfg(windows)]
+    fn raise_resize() {
+        TERMINAL_RESIZED.store(true, Ordering::SeqCst);
+    }
+}
+
+
+/// Enable ANSI escape processing for the run, restoring the previous console
+/// mode when dropped. No-op on Unix; on Windows turns on
+/// VIRTUAL_TERMINAL_PROCESSING for stdout (best effort: a redirected handle
+/// or an old console just keeps working without colors) and puts the saved
+/// mode back so the user's shell is left as it was found.
+pub struct ConsoleModeGuard {
+    _priv: (),
+}
+
+impl ConsoleModeGuard {
+    pub fn enable() -> Self {
+        // `panic = "abort"` in release skips `Drop`, but panic hooks still
+        // run first ÔÇö so the saved mode goes back even on that path. Arming
+        // the hook first leaves no window where the mode is changed and only
+        // the default hook is installed; the resize thread is already running
+        // by here, so that window is reachable rather than theoretical.
+        #[cfg(windows)]
+        windows::install_panic_hook();
+        #[cfg(windows)]
+        windows::enable_virtual_terminal();
+        ConsoleModeGuard { _priv: () }
+    }
+}
+
+impl Drop for ConsoleModeGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        windows::restore_console_mode();
+    }
+}
+
+#[cfg(windows)]
+pub use windows::{
+    die_from_sigterm, install_sigint_handler, install_sigterm_handler, install_sigwinch_handler,
+    restore_sigpipe,
+};
 
 /// Windows platform: no new crates, raw kernel32 via `extern "system"`.
 /// Ctrl-C and resize feed the same Atomics the Unix signals feed, so the run
@@ -342,7 +392,7 @@ mod windows {
     /// Poll the terminal size on a parked thread and set the same
     /// TERMINAL_RESIZED flag SIGWINCH sets on Unix. An event-driven watcher
     /// would need the console input buffer (`ENABLE_WINDOW_INPUT`) and would
-    /// consume every record it reads — including keystrokes meant for the
+    /// consume every record it reads ÔÇö including keystrokes meant for the
     /// shell. The sample period stays below `resize_settled()`'s quiet window
     /// so a sustained drag keeps pushing the timestamp forward and coalesces
     /// into one restart, exactly like a burst of SIGWINCH on Unix. Works when
@@ -370,15 +420,3 @@ mod windows {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_resize_notifications_are_consumed() {
-        take_terminal_resize();
-        notify_terminal_resize();
-        assert!(take_terminal_resize());
-        assert!(!take_terminal_resize());
-    }
-}

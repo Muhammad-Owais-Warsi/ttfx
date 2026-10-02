@@ -284,11 +284,15 @@ impl Engine {
     /// ascending order, then prune.
     pub fn update(&mut self, hooks: &mut dyn Hooks) {
         let (on, timed) = self.batch.plan();
+        // wasm32-unknown-unknown has no clock; the Session paces via rAF.
+        #[cfg(not(target_arch = "wasm32"))]
         let start = if timed {
             Some(std::time::Instant::now())
         } else {
             None
         };
+        #[cfg(target_arch = "wasm32")]
+        let start: Option<std::time::Instant> = None;
         if on {
             self.update_with::<true>(hooks);
         } else {

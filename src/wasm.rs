@@ -35,6 +35,9 @@ impl Session {
         background: Option<String>,
         bands: Option<bool>,
     ) -> Result<Session, JsError> {
+        // Without this a panic aborts with a bare "unreachable" and no
+        // message; the hook is what makes failures legible.
+        console_error_panic_hook::set_once();
         if input.trim().is_empty() {
             return Err(JsError::new("NO INPUT."));
         }

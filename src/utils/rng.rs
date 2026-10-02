@@ -97,14 +97,28 @@ impl Rng {
         Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
     }
 
-    /// Wasm entropy: two `Math.random` draws folded into a seed. Not
-    /// cryptographic, but visual runs only need uniqueness — and the wasm
+    /// Wasm entropy: `Math.random` when the host has it, else a counter.
+    /// Not cryptographic, but visual runs only need to differ — and the wasm
     /// `Session` takes an explicit seed whenever reproducibility matters.
+    /// The fallback exists because not every wasm host exposes the intrinsics
+    /// a `js_sys` import needs (Node's wasm sandbox does not), and a missing
+    /// import traps the whole module.
     #[cfg(target_arch = "wasm32")]
     pub fn from_entropy() -> Self {
-        let a = (js_sys::Math::random() * 4294967296.0) as u64;
-        let b = (js_sys::Math::random() * 4294967296.0) as u64;
-        Rng::seeded(a ^ b.wrapping_mul(0xBF58476D1CE4E5B9))
+        use std::cell::Cell;
+        thread_local! {
+            static COUNTER: Cell<u64> = const { Cell::new(0) };
+        }
+        let next = || {
+            wasm_random().unwrap_or_else(|| {
+                COUNTER.with(|c| {
+                    let v = c.get().wrapping_add(0x9E3779B97F4A7C15);
+                    c.set(v);
+                    v
+                })
+            })
+        };
+        Rng::seeded(next() ^ next().wrapping_mul(0xBF58476D1CE4E5B9))
     }
 
     /// Core generator: xoshiro256++ next().
@@ -395,6 +409,25 @@ fn os_seed() -> Option<u64> {
     // SAFETY: fills exactly random_buffer_length bytes on success.
     let ok = unsafe { SystemFunction036(buf.as_mut_ptr(), buf.len() as u32) };
     (ok != 0).then(|| u64::from_le_bytes(buf))
+}
+
+/// One `Math.random` draw in [0, 2^32), or `None` where the host has no
+/// `Math` (a wasm import that isn't linked traps, so it must stay optional).
+#[cfg(target_arch = "wasm32")]
+fn wasm_random() -> Option<u64> {
+    use wasm_bindgen::{JsCast, JsValue};
+    let get = |o: &js_sys::Object, k: &str| -> Option<JsValue> {
+        js_sys::Reflect::get(o.as_ref(), &JsValue::from_str(k)).ok()
+    };
+    let global = js_sys::global();
+    let math = get(&global, "Math")?.dyn_into::<js_sys::Object>().ok()?;
+    let f = get(&math, "random")?
+        .dyn_into::<js_sys::Function>()
+        .ok()?;
+    f.call0(&JsValue::from(math)).ok()?.as_f64().map(|v| {
+        let scaled = (v * 4294967296.0) as u64;
+        scaled.min(u32::MAX as u64)
+    })
 }
 
 /// Last-resort seed: wall-clock nanos mixed with the pid. Uniqueness is all

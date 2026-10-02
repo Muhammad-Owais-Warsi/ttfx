@@ -97,6 +97,16 @@ impl Rng {
         Rng::seeded(os_seed().unwrap_or_else(fallback_seed))
     }
 
+    /// Wasm entropy: two `Math.random` draws folded into a seed. Not
+    /// cryptographic, but visual runs only need uniqueness — and the wasm
+    /// `Session` takes an explicit seed whenever reproducibility matters.
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_entropy() -> Self {
+        let a = (js_sys::Math::random() * 4294967296.0) as u64;
+        let b = (js_sys::Math::random() * 4294967296.0) as u64;
+        Rng::seeded(a ^ b.wrapping_mul(0xBF58476D1CE4E5B9))
+    }
+
     /// Core generator: xoshiro256++ next().
     #[inline]
     fn next_u64(&mut self) -> u64 {

@@ -166,7 +166,7 @@ pub struct Terminal {
     output_buffer: String,
     move_cursor_to_top: String,
     frame_rate: i64,
-    last_time_printed: Instant,
+    last_time_printed: Option<Instant>,
 }
 
 fn ordered_buckets(
@@ -385,7 +385,7 @@ impl Terminal {
             output_buffer: String::new(),
             move_cursor_to_top,
             frame_rate,
-            last_time_printed: Instant::now(),
+            last_time_printed: pacing_now(),
         };
         Ok((terminal, chars))
     }
@@ -865,17 +865,39 @@ impl Terminal {
     }
 
     /// Terminal.enforce_framerate: sleep off the remainder; timestamp taken
-    /// AFTER the sleep (drift accumulates, faithfully).
+    /// AFTER the sleep (drift accumulates, faithfully). Pacing is a live-run
+    /// concern only: the wasm Session steps on rAF and never calls this.
     pub fn enforce_framerate(&mut self) {
-        if self.frame_rate == 0 {
-            return;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.frame_rate == 0 {
+                return;
+            }
+            let frame_delay = 1.0 / self.frame_rate as f64;
+            if let Some(last) = self.last_time_printed {
+                let elapsed = last.elapsed().as_secs_f64();
+                if elapsed < frame_delay {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(
+                        frame_delay - elapsed,
+                    ));
+                }
+            }
+            self.last_time_printed = Some(Instant::now());
         }
-        let frame_delay = 1.0 / self.frame_rate as f64;
-        let elapsed = self.last_time_printed.elapsed().as_secs_f64();
-        if elapsed < frame_delay {
-            std::thread::sleep(std::time::Duration::from_secs_f64(frame_delay - elapsed));
-        }
-        self.last_time_printed = Instant::now();
+    }
+}
+
+/// `Some(Instant::now())`, except on wasm32-unknown-unknown where std has no
+/// clock and `now()` panics. The wasm Session paces itself via rAF and never
+/// reads the pacing timestamp, so `None` is unobservable there.
+fn pacing_now() -> Option<Instant> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Some(Instant::now())
     }
 }
 
